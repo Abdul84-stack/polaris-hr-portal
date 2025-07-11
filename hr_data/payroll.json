@@ -1,0 +1,173 @@
+[
+    {
+        "Name ": "Abdul Bolaji (Admin)",
+        "Basic (\u20a6)": 50000,
+        "Housing (\u20a6": 37500,
+        "Transport (\u20a6)": 10000,
+        "Furniture(\u20a6) ": 2500,
+        "Total (\u20a6)": 100000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 17550,
+        "Tax Deduction (15% of Basic)": 7500,
+        "Monthly Net Pay)": 74950
+    },
+    {
+        "Name ": "Ada Ama",
+        "Basic (\u20a6)": 70000,
+        "Housing (\u20a6": 52500,
+        "Transport (\u20a6)": 14000,
+        "Furniture(\u20a6) ": 3500,
+        "Total (\u20a6)": 140000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 24570,
+        "Tax Deduction (15% of Basic)": 10500,
+        "Monthly Net Pay)": 104930
+    },
+    {
+        "Name ": "Udu Aka",
+        "Basic (\u20a6)": 50000,
+        "Housing (\u20a6": 37500,
+        "Transport (\u20a6)": 10000,
+        "Furniture(\u20a6) ": 2500,
+        "Total (\u20a6)": 100000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 17550,
+        "Tax Deduction (15% of Basic)": 7500,
+        "Monthly Net Pay)": 74950
+    },
+    {
+        "Name ": "Abdulahi Ibrahim",
+        "Basic (\u20a6)": 50000,
+        "Housing (\u20a6": 37500,
+        "Transport (\u20a6)": 10000,
+        "Furniture(\u20a6) ": 2500,
+        "Total (\u20a6)": 100000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 17550,
+        "Tax Deduction (15% of Basic)": 7500,
+        "Monthly Net Pay)": 74950
+    },
+    {
+        "Name ": "Addidas Puma",
+        "Basic (\u20a6)": 50000,
+        "Housing (\u20a6": 37500,
+        "Transport (\u20a6)": 10000,
+        "Furniture(\u20a6) ": 2500,
+        "Total (\u20a6)": 100000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 17550,
+        "Tax Deduction (15% of Basic)": 7500,
+        "Monthly Net Pay)": 74950
+    },
+    {
+        "Name ": "Big Kola",
+        "Basic (\u20a6)": 30000,
+        "Housing (\u20a6": 22500,
+        "Transport (\u20a6)": 6000,
+        "Furniture(\u20a6) ": 1500,
+        "Total (\u20a6)": 60000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 10530,
+        "Tax Deduction (15% of Basic)": 4500,
+        "Monthly Net Pay)": 44970
+    },
+    {
+        "Name ": "King Queen",
+        "Basic (\u20a6)": 50000,
+        "Housing (\u20a6": 37500,
+        "Transport (\u20a6)": 10000,
+        "Furniture(\u20a6) ": 2500,
+        "Total (\u20a6)": 100000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 17550,
+        "Tax Deduction (15% of Basic)": 7500,
+        "Monthly Net Pay)": 74950
+    },
+    {
+        "Name ": "Oni Emmanuel",
+        "Basic (\u20a6)": 30000,
+        "Housing (\u20a6": 22500,
+        "Transport (\u20a6)": 6000,
+        "Furniture(\u20a6) ": 1500,
+        "Total (\u20a6)": 60000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 10530,
+        "Tax Deduction (15% of Basic)": 4500,
+        "Monthly Net Pay)": 44970
+    },
+    {
+        "Name ": "Adams Bada",
+        "Basic (\u20a6)": 20000,
+        "Housing (\u20a6": 15000,
+        "Transport (\u20a6)": 4000,
+        "Furniture(\u20a6) ": 1000,
+        "Total (\u20a6)": 40000,
+        "Pension Deduction (18% of Basic, Housing and Transport)(\u20a6)": 7020,
+        "Tax Deduction (15% of Basic)": 3000,
+        "Monthly Net Pay)": 29980
+    },
+    {
+        "staff_id": "POL/2024/001",
+        "pay_period": "Jan-25",
+        "gross_pay": " 300,000.00 ",
+        "net_pay": " 200,000.00 ",
+        "deductions": " 50,000.00 ",
+        "bonus": " 50,000.00 ",
+        "pay_date": " 31-01-2025 "
+    },
+    {
+        "staff_id": "POL/2024/002",
+        "pay_period": "Jan-25",
+        "gross_pay": " 300,000.00 ",
+        "net_pay": " 200,000.00 ",
+        "deductions": " 50,000.00 ",
+        "bonus": " 50,000.00 ",
+        "pay_date": " 31-01-2025 "
+    },
+    {
+        "staff_id": "POL/2024/003",
+        "pay_period": "Jan-25",
+        "gross_pay": " 300,000.00 ",
+        "net_pay": " 200,000.00 ",
+        "deductions": " 50,000.00 ",
+        "bonus": " 50,000.00 ",
+        "pay_date": " 31-01-2025 "
+    },
+    {
+        "staff_id": "POL/2024/004",
+        "pay_period": "Jan-25",
+        "gross_pay": " 300,000.00 ",
+        "net_pay": " 200,000.00 ",
+        "deductions": " 50,000.00 ",
+        "bonus": " 50,000.00 ",
+        "pay_date": " 31-01-2025 "
+    },
+    {
+        "staff_id": "POL/2024/005",
+        "pay_period": "Jan-25",
+        "gross_pay": " 150,000.00 ",
+        "net_pay": " 100,000.00 ",
+        "deductions": " 30,000.00 ",
+        "bonus": " 20,000.00 ",
+        "pay_date": " 31-01-2025 "
+    },
+    {
+        "staff_id": "POL/2024/006",
+        "pay_period": "Jan-25",
+        "gross_pay": " 150,000.00 ",
+        "net_pay": " 100,000.00 ",
+        "deductions": " 30,000.00 ",
+        "bonus": " 20,000.00 ",
+        "pay_date": " 31-01-2025 "
+    },
+    {
+        "staff_id": "POL/2024/007",
+        "pay_period": "Jan-25",
+        "gross_pay": " 150,000.00 ",
+        "net_pay": " 100,000.00 ",
+        "deductions": " 30,000.00 ",
+        "bonus": " 20,000.00 ",
+        "pay_date": " 31-01-2025 "
+    },
+    {
+        "staff_id": "POL/2024/008",
+        "pay_period": "Jan-25",
+        "gross_pay": " 150,000.00 ",
+        "net_pay": " 100,000.00 ",
+        "deductions": " 30,000.00 ",
+        "bonus": " 20,000.00 ",
+        "pay_date": " 31-01-2025 "
+    }
+]

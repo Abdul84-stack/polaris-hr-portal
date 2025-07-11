@@ -1,0 +1,67 @@
+[
+    {
+        "staff_id": null,
+        "date": "2025-06-30",
+        "scores": {
+            "Cost Control ": 85
+        },
+        "comments": {
+            "Cost Control ": "25% Opex Cost Reduction was achieved "
+        },
+        "general_comment": "During the period under investigation, every cost was always subject to cost control"
+    },
+    {
+        "appraisal_id": "APP-0002",
+        "staff_id": "POL/2024/003",
+        "staff_name": "Abdulahi Ibrahim",
+        "appraisal_date": "2025-07-11T18:42:17.094711",
+        "appraisal_period_start": "2025-01-01",
+        "appraisal_period_end": "2025-06-30",
+        "goal_appraisals": [
+            {
+                "goal_id": "PG-0004",
+                "goal_title": "Cost Optimization",
+                "achieved_status": "Fully Achieved",
+                "self_assessment": "Achieved 25% Cost Saving "
+            },
+            {
+                "goal_id": "GOAL_0005",
+                "goal_title": null,
+                "achieved_status": "Fully Achieved",
+                "self_assessment": "None"
+            }
+        ],
+        "overall_strengths": "N/A",
+        "overall_improvements": "N/A",
+        "future_aspirations": "N/A",
+        "manager_feedback": "",
+        "final_rating": ""
+    },
+    {
+        "appraisal_id": "APP-0003",
+        "staff_id": "POL/2024/003",
+        "staff_name": "Abdulahi Ibrahim",
+        "appraisal_date": "2025-07-11T18:42:47.018706",
+        "appraisal_period_start": "2025-01-01",
+        "appraisal_period_end": "2025-06-30",
+        "goal_appraisals": [
+            {
+                "goal_id": "PG-0004",
+                "goal_title": "Cost Optimization",
+                "achieved_status": "Fully Achieved",
+                "self_assessment": "Achieved 25% Cost Saving "
+            },
+            {
+                "goal_id": "GOAL_0005",
+                "goal_title": null,
+                "achieved_status": "Fully Achieved",
+                "self_assessment": "None"
+            }
+        ],
+        "overall_strengths": "N/A",
+        "overall_improvements": "N/A",
+        "future_aspirations": "N/A",
+        "manager_feedback": "",
+        "final_rating": ""
+    }
+]

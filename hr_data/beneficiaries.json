@@ -1,0 +1,37 @@
+{
+    "Bestway Engineering Services Ltd": {
+        "Account Name": "Benjamin",
+        "Account No": "1234567890",
+        "Bank": "GTB"
+    },
+    "Alpha Link Technical Services": {
+        "Account Name": "Oladele",
+        "Account No": "2345678900",
+        "Bank": "Access Bank"
+    },
+    "AFLAC COM SPECs": {
+        "Account Name": "Fasco",
+        "Account No": "1234567890",
+        "Bank": "Opay"
+    },
+    "Emmafem Resources Nig. Ent.": {
+        "Account Name": "Radius",
+        "Account No": "2345678901",
+        "Bank": "UBA"
+    },
+    "Neptune Global Services": {
+        "Account Name": "Folashade",
+        "Account No": "12345678911",
+        "Bank": "Union Bank"
+    },
+    "Other (Manually Enter Details)": {
+        "Account Name": "",
+        "Account No": "",
+        "Bank": ""
+    },
+    "Chucks Redeema": {
+        "Account Name": "Chucks Moore",
+        "Account No": "012345678",
+        "Bank": "GTB"
+    }
+}

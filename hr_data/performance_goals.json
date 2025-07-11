@@ -1,0 +1,69 @@
+[
+    {
+        "goal_id": 1,
+        "staff_id": "N/A",
+        "staff_name": "Abdulahi Ibrahim",
+        "title": "Cost-Optimization",
+        "description": "Ensure zero wastage of office consumables",
+        "due_date": "2025-09-30",
+        "status": "Not Started",
+        "set_date": "2025-06-13",
+        "user_id": "c2fec014-9fbc-4583-9954-fc75777ad565",
+        "line_manager_id": null,
+        "line_manager_approval": "Pending",
+        "comments": ""
+    },
+    {
+        "staff_id": null,
+        "title": "Cost Control ",
+        "description": "Ensure actual operation cost is subject to budgeted cost  ",
+        "metric": "Achieve 25% Cost-Revenue Ration",
+        "deadline": "2025-06-30",
+        "created_at": "2025-06-30"
+    },
+    {
+        "staff_id": null,
+        "title": "Cost Control ",
+        "description": "Ensure Reduction in Cost",
+        "metric": "Achieve 25% Cost-Revenue Ration",
+        "deadline": "2025-07-31",
+        "created_at": "2025-07-01"
+    },
+    {
+        "goal_id": "PG-0004",
+        "staff_id": "POL/2024/003",
+        "employee_name": "Abdulahi Ibrahim",
+        "goal_title": "Cost Optimization",
+        "goal_description": "Reduction OPEX Cost for H1 2025 by 25%",
+        "due_date": "2025-12-31",
+        "set_date": "2025-07-02T18:01:38.165582",
+        "status": "Pending Review",
+        "manager_comment": "",
+        "employee_updates": [],
+        "final_score": null
+    },
+    {
+        "goal_id": "GOAL_0005",
+        "staff_id": "POL/2024/003",
+        "employee_name": "Abdulahi Ibrahim",
+        "goal_area": "Admin ",
+        "goal_description": "Cost Management-Ensure Operating is minimized ",
+        "target_metric": "Achieve Cost saving of 25%",
+        "due_date": "2025-12-31",
+        "set_date": "2025-07-07T14:00:51.824824",
+        "status": "Pending Review"
+    },
+    {
+        "goal_id": "GOAL-20250709105555-POL/2024/002",
+        "staff_id": "POL/2024/002",
+        "staff_name": "Udu Aka",
+        "goal_area": "Cost Control",
+        "goal_description": "Ensure operational cost is subject to budgeted cost ",
+        "target_metric": "Achieve cost saving of 25%",
+        "due_date": "2025-12-31",
+        "priority": "High",
+        "status": "Pending Review",
+        "set_date": "2025-07-09T10:55:55.700008",
+        "progress": "Not Started"
+    }
+]
