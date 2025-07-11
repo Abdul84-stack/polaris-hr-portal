@@ -1,0 +1,39 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ student_name }}'s Report Card</title>
+    <style>
+        table, th, td {
+            border: 1px solid black;
+            border-collapse: collapse;
+            padding: 8px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Welcome, {{ student_name }}</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Subject</th>
+                <th>CA1</th>
+                <th>CA2</th>
+                <th>Exam</th>
+                <th>Final</th>
+                <th>Grade</th>
+                <th>Remark</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in data %}
+            <tr>
+                {% for value in row %}
+                <td>{{ value }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
