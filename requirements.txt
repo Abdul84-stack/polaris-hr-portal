@@ -1,5 +1,2 @@
 streamlit
-pandas
-plotly
-fpdf
-passlib
+fpdf2
