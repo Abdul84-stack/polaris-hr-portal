@@ -1,7 +1,7 @@
 streamlit
 pandas
 plotly
-fpdf2
+fpdf
 passlib
 
 
