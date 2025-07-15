@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, date
 import os
 import pandas as pd
 import plotly.express as px
-from fpdf2 import FPDF, XPos, YPos
+from fpdf import FPDF, XPos, YPos
 import base64
 from passlib.hash import pbkdf2_sha256 # For password hashing
 
