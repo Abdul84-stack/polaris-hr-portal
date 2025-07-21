@@ -1,7 +1,13 @@
 streamlit
+json
+datetime
+os
 pandas
-plotly
+plotly-express
 fpdf
+base64
 passlib
+requests
+uuid
 
 
