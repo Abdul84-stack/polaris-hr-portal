@@ -4,9 +4,11 @@ from datetime import datetime, timedelta, date
 import os
 import pandas as pd
 import plotly.express as px
-from fpdf import FPDF, XPos, YPos
+from fpdf import FPDF
 import base64
 from passlib.hash import pbkdf2_sha256 # For password hashing
+import requests # For making HTTP requests to external APIs (e.g., Gemini)
+import uuid # For generating unique IDs
 
 # --- SET STREAMLIT PAGE CONFIG (MUST BE THE VERY FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
@@ -25,7 +27,11 @@ PERFORMANCE_GOALS_FILE = os.path.join(DATA_DIR, "performance_goals.json")
 SELF_APPRAISALS_FILE = os.path.join(DATA_DIR, "self_appraisals.json")
 PAYROLL_FILE = os.path.join(DATA_DIR, "payroll.json")
 BENEFICIARIES_FILE = os.path.join(DATA_DIR, "beneficiaries.json")
-HR_POLICIES_FILE = os.path.join(DATA_DIR, "hr_policies.json") # New
+HR_POLICIES_FILE = os.path.join(DATA_DIR, "hr_policies.json")
+CHAT_MESSAGES_FILE = os.path.join(DATA_DIR, "chat_messages.json") # NEW: Chat messages file
+ATTENDANCE_RECORDS_FILE = os.path.join(DATA_DIR, "attendance_records.json") # NEW: Attendance records file
+DISCIPLINARY_RECORDS_FILE = os.path.join(DATA_DIR, "disciplinary_records.json") # NEW: Disciplinary records file
+
 
 # Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -95,7 +101,181 @@ def load_data(filename, default_value=None):
     try:
         if os.path.exists(filename) and os.path.getsize(filename) > 0:
             with open(filename, "r") as file:
-                return json.load(file)
+                data = json.load(file)
+                # Specific handling for users.json to ensure 'profile' and 'staff_id'
+                if filename == USERS_FILE:
+                    for user in data:
+                        user.setdefault('profile', {})
+                        user['profile'].setdefault('staff_id', 'N/A')
+                        user['profile'].setdefault('name', user.get('username', 'Unknown User')) # Ensure name is present
+                        user['profile'].setdefault('department', 'N/A')
+                        user['profile'].setdefault('grade_level', 'N/A')
+                        user['profile'].setdefault('email_address', user.get('username', 'N/A'))
+                # Specific handling for leave/opex requests to ensure requester_staff_id and request_id
+                elif filename in [LEAVE_REQUESTS_FILE, OPEX_CAPEX_REQUESTS_FILE]:
+                    for req in data:
+                        req.setdefault('request_id', str(uuid.uuid4())) # Ensure request_id exists
+                        req.setdefault('requester_staff_id', 'N/A')
+                        req.setdefault('requester_name', 'N/A')
+                        req.setdefault('requester_department', 'N/A')
+                        req.setdefault('request_type', 'N/A')
+                        req.setdefault('item_description', 'N/A')
+                        req.setdefault('expense_line', 'N/A')
+                        req.setdefault('budgeted_amount', 0.0)
+                        req.setdefault('material_cost', 0.0)
+                        req.setdefault('labor_cost', 0.0)
+                        req.setdefault('total_amount', 0.0)
+                        req.setdefault('wht_percentage', 0.0)
+                        req.setdefault('wht_amount', 0.0)
+                        req.setdefault('net_amount_payable', 0.0)
+                        req.setdefault('budget_balance', 0.0)
+                        req.setdefault('justification', 'N/A')
+                        req.setdefault('vendor_name', 'N/A')
+                        req.setdefault('vendor_account_name', 'N/A')
+                        req.setdefault('vendor_account_no', 'N/A')
+                        req.setdefault('vendor_bank', 'N/A')
+                        req.setdefault('document_path', None)
+                        req.setdefault('submission_date', datetime.now().isoformat())
+                        req.setdefault('current_approver_role', 'N/A') # Crucial for KeyError fix
+                        req.setdefault('current_approval_stage', 0)
+                        req.setdefault('final_status', 'Pending')
+                        req.setdefault('approval_history', [])
+                        # Ensure duration_days and request_date are set for leave requests
+                        if filename == LEAVE_REQUESTS_FILE:
+                            req.setdefault('duration_days', 0) # Default to 0, will be calculated on submission
+                            req.setdefault('request_date', datetime.now().isoformat())
+                # Specific handling for performance_goals to ensure all expected keys are present
+                elif filename == PERFORMANCE_GOALS_FILE:
+                    for goal in data:
+                        goal.setdefault('goal_id', str(uuid.uuid4()))
+                        goal.setdefault('staff_id', 'N/A')
+                        goal.setdefault('goal_description', 'No description provided')
+                        goal.setdefault('collaborating_department', 'N/A')
+                        goal.setdefault('status', 'Not Started')
+                        goal.setdefault('employee_remark_update', '')
+                        goal.setdefault('start_date', datetime.now().isoformat().split('T')[0])
+                        goal.setdefault('end_date', (datetime.now() + timedelta(days=365)).isoformat().split('T')[0])
+                        goal.setdefault('duration', 'N/A')
+                        goal.setdefault('weighting_percent', 0)
+                        goal.setdefault('set_date', datetime.now().isoformat())
+                        goal.setdefault('progress_updates', [])
+                        goal.setdefault('self_rating', None)
+                        goal.setdefault('line_manager_rating', None)
+                # Specific handling for self_appraisals to ensure all expected keys are present
+                elif filename == SELF_APPRAISALS_FILE:
+                    for appraisal in data:
+                        appraisal.setdefault('appraisal_id', str(uuid.uuid4()))
+                        appraisal.setdefault('staff_id', 'N/A')
+                        appraisal.setdefault('appraisal_period', str(datetime.now().year))
+                        appraisal.setdefault('employee_data', {})
+                        appraisal['employee_data'].setdefault('name', 'N/A')
+                        appraisal['employee_data'].setdefault('designation', 'N/A')
+                        appraisal['employee_data'].setdefault('department', 'N/A')
+                        appraisal['employee_data'].setdefault('date', datetime.now().isoformat().split('T')[0])
+                        appraisal.setdefault('key_status_ratings', {})
+                        appraisal.setdefault('section_a_goals', [])
+                        appraisal.setdefault('section_b_qualitative', {})
+                        appraisal['section_b_qualitative'].setdefault('leadership_team_development', {'remark': '', 'self_rating': None, 'line_manager_rating': None})
+                        appraisal['section_b_qualitative'].setdefault('coordinate_optimize_resources', {'remark': '', 'self_rating': None, 'line_manager_rating': None})
+                        appraisal['section_b_qualitative'].setdefault('interpersonal', {'remark': '', 'self_rating': None, 'line_manager_rating': None})
+                        appraisal.setdefault('training_recommendation', '')
+                        appraisal.setdefault('hr_remark', '')
+                        appraisal.setdefault('md_remark', '')
+                # Specific handling for chat messages
+                elif filename == CHAT_MESSAGES_FILE:
+                    for msg in data:
+                        msg.setdefault('message_id', str(uuid.uuid4()))
+                        msg.setdefault('sender_staff_id', 'N/A')
+                        msg.setdefault('receiver_staff_id', 'N/A')
+                        msg.setdefault('timestamp', datetime.now().isoformat())
+                        msg.setdefault('message', '')
+                        msg.setdefault('read', False)
+                # Specific handling for payroll
+                elif filename == PAYROLL_FILE:
+                    for payslip in data:
+                        payslip.setdefault('payslip_id', str(uuid.uuid4()))
+                        payslip.setdefault('staff_id', 'N/A')
+                        payslip.setdefault('pay_period', 'N/A')
+                        # Convert to float to prevent ValueError in formatting
+                        # Remove commas before converting to float
+                        gross_pay_str = str(payslip.get('gross_pay', 0.0)).replace(',', '')
+                        deductions_str = str(payslip.get('deductions', 0.0)).replace(',', '')
+                        net_pay_str = str(payslip.get('net_pay', 0.0)).replace(',', '')
+
+                        payslip['gross_pay'] = float(gross_pay_str)
+                        payslip['deductions'] = float(deductions_str)
+                        payslip['net_pay'] = float(net_pay_str)
+                        payslip.setdefault('pay_date', datetime.now().isoformat().split('T')[0])
+                # Specific handling for HR policies
+                elif filename == HR_POLICIES_FILE:
+                    # Ensure each policy is a dictionary, not a string
+                    cleaned_data = []
+                    for policy_entry in data:
+                        if isinstance(policy_entry, str): # Handle cases where policy might be a plain string
+                            st.warning(f"Found string policy entry in {filename}: '{policy_entry}'. Skipping or converting.")
+                            # You might choose to skip it, or try to convert it to a dict if it's a simple string
+                            cleaned_data.append({
+                                "policy_id": str(uuid.uuid4()),
+                                "title": f"Malformed Policy ({str(uuid.uuid4())[:8]})",
+                                "content": policy_entry,
+                                "last_updated": datetime.now().isoformat().split('T')[0]
+                            })
+                        else:
+                            policy_entry.setdefault('policy_id', str(uuid.uuid4()))
+                            policy_entry.setdefault('title', 'N/A')
+                            policy_entry.setdefault('content', 'N/A')
+                            policy_entry.setdefault('last_updated', datetime.now().isoformat().split('T')[0])
+                            cleaned_data.append(policy_entry)
+                    data = cleaned_data # Update data with cleaned version
+                # Specific handling for disciplinary records
+                elif filename == DISCIPLINARY_RECORDS_FILE:
+                    for record in data:
+                        record.setdefault('record_id', str(uuid.uuid4()))
+                        record.setdefault('staff_id', 'N/A')
+                        record.setdefault('incident_date', datetime.now().isoformat().split('T')[0])
+                        record.setdefault('incident_type', 'N/A')
+                        record.setdefault('description', 'N/A')
+                        record.setdefault('action_taken', 'N/A')
+                        record.setdefault('status', 'Open')
+                        record.setdefault('recorded_by', 'N/A')
+                        record.setdefault('recorded_date', datetime.now().isoformat())
+                # Specific handling for attendance records
+                elif filename == ATTENDANCE_RECORDS_FILE:
+                    for record in data:
+                        record.setdefault('record_id', str(uuid.uuid4()))
+                        record.setdefault('staff_id', 'N/A')
+                        record.setdefault('date', datetime.now().isoformat().split('T')[0])
+                        
+                        # --- FIX for ValueError: Invalid isoformat string ---
+                        # Ensure clock_in_time and clock_out_time are full ISO format strings
+                        # If they are just time strings (e.g., "11:31:30"), prepend today's date.
+                        
+                        # Handle clock_in_time
+                        if isinstance(record.get('clock_in_time'), str) and 'T' not in record['clock_in_time']:
+                            try:
+                                # Try to parse as time only, then combine with a dummy date (e.g., today's date)
+                                time_obj = datetime.strptime(record['clock_in_time'], '%H:%M:%S').time()
+                                # Use a fixed date (e.g., 2000-01-01) for time-only strings to ensure consistent isoformat
+                                record['clock_in_time'] = datetime.combine(date(2000, 1, 1), time_obj).isoformat()
+                            except ValueError:
+                                record['clock_in_time'] = None # Fallback if even time parsing fails
+                        elif not isinstance(record.get('clock_in_time'), str):
+                            record['clock_in_time'] = None # Ensure it's None if not a string
+
+                        # Handle clock_out_time
+                        if isinstance(record.get('clock_out_time'), str) and 'T' not in record['clock_out_time']:
+                            try:
+                                time_obj = datetime.strptime(record['clock_out_time'], '%H:%M:%S').time()
+                                record['clock_out_time'] = datetime.combine(date(2000, 1, 1), time_obj).isoformat()
+                            except ValueError:
+                                record['clock_out_time'] = None # Fallback if even time parsing fails
+                        elif not isinstance(record.get('clock_out_time'), str):
+                            record['clock_out_time'] = None # Ensure it's None if not a string
+                        # --- END FIX ---
+
+                        record.setdefault('duration_hours', 0.0)
+
+                return data
         return default_value
     except json.JSONDecodeError:
         st.warning(f"Error decoding JSON from {filename}. File might be corrupted or empty. Resetting data.")
@@ -111,7 +291,7 @@ def save_uploaded_file(uploaded_file, destination_folder="uploaded_documents"):
     if uploaded_file is not None:
         if not os.path.exists(destination_folder):
             os.makedirs(destination_folder)
-            
+
         file_path = os.path.join(destination_folder, uploaded_file.name)
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
@@ -126,30 +306,92 @@ def generate_opex_capex_pdf(request_data):
     pdf.cell(200, 10, "OPEX/CAPEX Requisition Summary", 0, 1, "C")
     pdf.ln(10)
 
+    # Set font for content
     pdf.set_font("Arial", "", 10)
+    line_height = 7 # Standard line height
+
+    # Helper to safely get data with default
+    def get_data(key, default='N/A'):
+        return request_data.get(key, default)
+
+    # Format currency
+    def format_currency(amount):
+        try:
+            return f"NGN {float(amount):,.2f}"
+        except (ValueError, TypeError):
+            return f"NGN N/A (Invalid: {amount})"
+
+    # Format date
+    def format_date(date_str):
+        if isinstance(date_str, str):
+            try:
+                return datetime.fromisoformat(date_str).strftime('%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                return date_str # Return as is if not valid isoformat
+        return date_str
+
+    # Extract and format data
+    requester_name = get_data('requester_name')
+    requester_department = get_data('requester_department')
+    request_type = get_data('request_type')
+    item_description = get_data('item_description')
+    expense_line = get_data('expense_line')
+    total_amount = format_currency(get_data('total_amount'))
+    net_amount_payable = format_currency(get_data('net_amount_payable'))
+    justification = get_data('justification')
+    vendor_name = get_data('vendor_name')
+    vendor_account_name = get_data('vendor_account_name')
+    vendor_account_no = get_data('vendor_account_no')
+    vendor_bank = get_data('vendor_bank')
+
+    # Print main details
+    pdf.write(line_height, f"Requester: {requester_name} ({requester_department})")
+    pdf.ln(line_height)
+    pdf.write(line_height, f"Request Type: {request_type}")
+    pdf.ln(line_height)
+    # Item Description might be long, use multi_cell for it
+    pdf.write(line_height, "Item Description: ")
+    pdf.set_x(pdf.get_x()) # Set X to current position after "Item Description: "
+    pdf.multi_cell(0, line_height, item_description, 0, 'L') # 0 for full width, L for left align
     
-    # Updated keys to reflect new fields
-    for key, value in request_data.items():
-        if key in ['request_id', 'requester_name', 'requester_staff_id', 'requester_department',
-                            'request_type', 'item_description', 'expense_line', 'budgeted_amount',
-                            'material_cost', 'labor_cost', 'total_amount', 'wht_percentage',
-                            'wht_amount', 'net_amount_payable', 'budget_balance',
-                            'justification', 'vendor_name', 'vendor_account_name', 'vendor_account_no',
-                            'vendor_bank', 'submission_date', 'final_status']:
-            pdf.set_font("Arial", "B", 10)
-            pdf.cell(50, 7, f"{key.replace('_', ' ').title()}:", 0, 0)
-            pdf.set_font("Arial", "", 10)
-            pdf.multi_cell(0, 7, str(value))
-    
-    pdf.ln(5)
+    pdf.write(line_height, f"Expense Line: {expense_line}")
+    pdf.ln(line_height)
+    pdf.write(line_height, f"Total Amount: {total_amount}")
+    pdf.ln(line_height)
+    pdf.write(line_height, f"Net Amount Payable: {net_amount_payable}")
+    pdf.ln(line_height)
+    # Justification might be long, use multi_cell for it
+    pdf.write(line_height, "Justification: ")
+    pdf.set_x(pdf.get_x()) # Set X to current position after "Justification: "
+    pdf.multi_cell(0, line_height, justification, 0, 'L')
+
+    pdf.write(line_height, f"Vendor: {vendor_name} (Account: {vendor_account_no}, Bank: {vendor_bank})")
+    pdf.ln(line_height)
+    pdf.ln(5) # Add some extra space before history
+
     pdf.set_font("Arial", "B", 12)
     pdf.cell(200, 10, "Approval History:", 0, 1)
     pdf.set_font("Arial", "", 10)
+
+    # Ensure enough horizontal space for multi_cell for history entries
+    # The '0' in multi_cell(0, ...) means it will use the remaining width to the right margin.
+    # We need to ensure the cursor is at the left margin before calling it.
     if request_data.get('approval_history'):
         for entry in request_data['approval_history']:
-            pdf.multi_cell(0, 7, f"- {entry.get('approver_role')} by {entry.get('approver_name')} on {entry.get('date')}: {entry.get('status')}. Comment: {entry.get('comment', 'No comment.')}")
+            approver_role = entry.get('approver_role', 'N/A')
+            approver_name = entry.get('approver_name', 'N/A')
+            approval_date = format_date(entry.get('date', 'N/A'))
+            status = entry.get('status', 'N/A')
+            comment = entry.get('comment', 'No comment.')
+            
+            history_text = f"- {approver_role} by {approver_name} on {approval_date}: {status}. Comment: {comment}"
+            
+            # Reset X position to left margin before each multi_cell to ensure full width is available
+            pdf.set_x(pdf.l_margin) 
+            pdf.multi_cell(0, line_height, history_text, 0, 'L') # Use 0 for width to extend to right margin
     else:
-        pdf.multi_cell(0, 7, "No approval history recorded.")
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, line_height, "No approval history recorded.", 0, 'L')
 
     # Save the PDF
     pdf_filename = f"OPEX_CAPEX_Request_{request_data['request_id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
@@ -192,8 +434,8 @@ def setup_initial_data():
                 "staff_id": "POL/2024/001", # Moved staff_id here
                 "date_of_birth": "1995-01-01",
                 "gender": "Female", # Corrected from Male in table
-                "grade_level": "Officer", 
-                "department": "Marketing", 
+                "grade_level": "Officer",
+                "department": "Marketing",
                 "education_background": "BSc. Marketing",
                 "professional_experience": "5 years in digital marketing",
                 "address": "456 Market St, Abuja",
@@ -293,8 +535,8 @@ def setup_initial_data():
                 "date_of_birth": "2002-06-16",
                 "gender": "Female",
                 "grade_level": "Officer",
-                "department": "IT", # Changed from Administration to IT for variety
-                "education_background": "B.Sc. Computer Science",
+                "department": "IT", # Changed from Administration to IT
+                "education_background": "BSc. Computer Science",
                 "professional_experience": "2 years in IT support",
                 "address": "404 Tech Road, Enugu",
                 "phone_number": "+2348078901234",
@@ -304,2009 +546,2280 @@ def setup_initial_data():
             }
         }
     ]
-    
-    # Only create initial users if the file doesn't exist or is empty
+
+    initial_policies = [
+        {
+            "policy_id": str(uuid.uuid4()),
+            "title": "Employee Code of Conduct",
+            "content": """
+            **1. Introduction**
+            This Code of Conduct outlines the expected standards of behavior and professionalism for all employees of Polaris Digitech. Adherence to this code is mandatory and reflects our commitment to a respectful, productive, and ethical work environment.
+
+            **2. Respect and Professionalism**
+            Employees must treat colleagues, clients, partners, and the public with respect, courtesy, and fairness. Discrimination, harassment, or any form of offensive behavior based on race, gender, religion, age, disability, sexual orientation, or any other protected characteristic will not be tolerated. Professionalism should be maintained in all communications and interactions.
+
+            **3. Integrity and Honesty**
+            All business dealings must be conducted with the highest level of integrity and honesty. Employees must not engage in any form of fraud, theft, bribery, or corruption. Conflicts of interest must be disclosed and managed appropriately to ensure that personal interests do not interfere with the company's best interests.
+
+            **4. Confidentiality**
+            Employees are obligated to protect the confidential information of Polaris Digitech, its clients, and its partners. This includes, but is not limited to, trade secrets, financial data, client lists, and personal employee information. Confidential information should not be disclosed to unauthorized individuals or used for personal gain.
+
+            **5. Workplace Safety and Health**
+            Polaris Digitech is committed to providing a safe and healthy work environment. Employees must comply with all safety regulations and procedures, report any hazards or accidents promptly, and take reasonable care for their own safety and the safety of others.
+
+            **6. Use of Company Property**
+            Company property, including equipment, systems, and facilities, must be used responsibly and for legitimate business purposes only. Unauthorized use, damage, or theft of company property is strictly prohibited.
+
+            **7. Compliance with Laws and Regulations**
+            Employees must comply with all applicable laws, regulations, and company policies. This includes laws related to data privacy, anti-money laundering, environmental protection, and employment.
+
+            **8. Social Media Policy**
+            Employees should exercise caution and good judgment when using social media. Content that is discriminatory, harassing, defamatory, or that discloses confidential company information is prohibited. Personal opinions expressed on social media should not be attributed to Polaris Digitech.
+
+            **9. Reporting Violations**
+            Employees are encouraged to report any suspected violations of this Code of Conduct or other company policies to their manager, HR department, or through established reporting channels. Retaliation against employees who report concerns in good faith is strictly prohibited.
+
+            **10. Consequences of Violation**
+            Violations of this Code of Conduct may result in disciplinary action, up to and including termination of employment, and may also lead to legal action where applicable.
+            """,
+            "last_updated": "2024-01-01"
+        },
+        {
+            "policy_id": str(uuid.uuid4()),
+            "title": "Leave Policy",
+            "content": """
+            **1. Introduction**
+            Polaris Digitech provides various types of leave to support employees' well-being and personal needs while ensuring business continuity. This policy outlines the guidelines for requesting and managing leave.
+
+            **2. Types of Leave**
+            * **Annual Leave:** All full-time employees are entitled to 20 working days of paid annual leave per year, accrued monthly. Leave must be approved in advance by the employee's line manager.
+            * **Sick Leave:** Employees are entitled to up to 10 working days of paid sick leave per year. For absences exceeding 3 consecutive days, a medical certificate is required.
+            * **Maternity Leave:** Female employees are entitled to 16 weeks of paid maternity leave.
+            * **Paternity Leave:** Male employees are entitled to 2 weeks of paid paternity leave.
+            * **Compassionate Leave:** Up to 5 working days of paid leave may be granted in cases of bereavement or serious family emergencies.
+            * **Study Leave:** Discretionary leave may be granted for approved professional development or educational pursuits.
+
+            **3. Leave Request Procedure**
+            All leave requests (except for emergencies) must be submitted through the HR Portal at least two weeks in advance for annual leave, and as soon as practicable for other types of leave. Line managers must approve leave requests, considering operational requirements.
+
+            **4. Leave Accrual and Carry-Over**
+            Annual leave accrues from the employee's start date. A maximum of 5 unused annual leave days can be carried over to the next calendar year. Any leave exceeding this amount will be forfeited.
+
+            **5. Unpaid Leave**
+            In exceptional circumstances, unpaid leave may be granted at the discretion of management, following a formal request and justification.
+
+            **6. Return to Work**
+            Employees are expected to return to work on the scheduled date after leave. Any delays must be communicated to the line manager and HR department immediately.
+            """,
+            "last_updated": "2024-01-01"
+        },
+        {
+            "policy_id": str(uuid.uuid4()),
+            "title": "Expense Reimbursement Policy",
+            "content": """
+            **1. Purpose**
+            This policy outlines the guidelines and procedures for employees to incur and claim reimbursement for business-related expenses while performing duties for Polaris Digitech.
+
+            **2. General Principles**
+            * All expenses must be legitimate, reasonable, and directly related to company business.
+            * Employees must exercise good judgment and cost-consciousness when incurring expenses.
+            * Original receipts or valid proof of payment are required for all reimbursement claims.
+            * Claims must be submitted within 30 days of the expense being incurred.
+
+            **3. Reimbursable Expenses**
+            * **Travel:** Airfare (economy class), train fares, bus fares, taxi/ride-share (business-related), personal car mileage (at approved rates).
+            * **Accommodation:** Reasonable hotel costs for business travel.
+            * **Meals:** Reasonable meal expenses incurred while traveling or entertaining clients (with client names and business purpose noted).
+            * **Office Supplies:** Purchase of necessary office supplies not available through standard company procurement.
+            * **Training/Conferences:** Approved registration fees and associated travel/accommodation costs.
+
+            **4. Non-Reimbursable Expenses**
+            * Personal expenses (e.g., personal entertainment, toiletries, personal phone calls).
+            * Alcoholic beverages (unless explicitly approved for client entertainment).
+            * Traffic fines or parking tickets.
+            * First-class travel or luxury accommodation without prior executive approval.
+
+            **5. Approval Limits**
+            Expenses exceeding certain thresholds may require pre-approval from a line manager or department head. Specific limits are detailed in the company's financial guidelines.
+
+            **6. Reimbursement Procedure**
+            * Complete an expense claim form via the HR Portal.
+            * Attach all original receipts or scanned copies.
+            * Submit the claim to your line manager for approval.
+            * Approved claims will be processed by the Finance department and reimbursed via bank transfer.
+
+            **7. Audit and Compliance**
+            All expense claims are subject to audit. Any fraudulent or non-compliant claims will result in disciplinary action and potential legal consequences.
+            """,
+            "last_updated": "2024-01-01"
+        }
+    ]
+
+    initial_payroll_data = [
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/001",
+            "pay_period": "July 2024",
+            "gross_pay": "350,000.00", # Changed to string to simulate original issue
+            "deductions": "50,000.00", # Example: Tax, pension
+            "net_pay": "300,000.00",
+            "pay_date": "2024-07-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/002",
+            "pay_period": "July 2024",
+            "gross_pay": "700,000.00",
+            "deductions": "120,000.00",
+            "net_pay": "580,000.00",
+            "pay_date": "2024-07-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/003",
+            "pay_period": "July 2024",
+            "gross_pay": "650,000.00",
+            "deductions": "110,000.00",
+            "net_pay": "540,000.00",
+            "pay_date": "2024-07-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/004",
+            "pay_period": "July 2024",
+            "gross_pay": "600,000.00",
+            "deductions": "100,000.00",
+            "net_pay": "500,000.00",
+            "pay_date": "2024-07-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/005",
+            "pay_period": "July 2024",
+            "gross_pay": "320,000.00",
+            "deductions": "45,000.00",
+            "net_pay": "275,000.00",
+            "pay_date": "2024-07-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/006",
+            "pay_period": "July 2024",
+            "gross_pay": "300,000.00",
+            "deductions": "40,000.00",
+            "net_pay": "260,000.00",
+            "pay_date": "2024-07-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "ADM/2024/000",
+            "pay_period": "July 2024",
+            "gross_pay": "1,500,000.00",
+            "deductions": "300,000.00",
+            "net_pay": "1,200,000.00",
+            "pay_date": "2024-07-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/001",
+            "pay_period": "June 2024",
+            "gross_pay": "350,000.00",
+            "deductions": "50,000.00",
+            "net_pay": "300,000.00",
+            "pay_date": "2024-06-25"
+        },
+        {
+            "payslip_id": str(uuid.uuid4()),
+            "staff_id": "POL/2024/002",
+            "pay_period": "June 2024",
+            "gross_pay": "700,000.00",
+            "deductions": "120,000.00",
+            "net_pay": "580,000.00",
+            "pay_date": "2024-06-25"
+        },
+    ]
+
+
     if not os.path.exists(USERS_FILE) or os.path.getsize(USERS_FILE) == 0:
         save_data(initial_users, USERS_FILE)
-        st.success("Initial user data created.")
-
-    # Initial HR Policies
-    initial_policies = {
-        "Staff Handbook": "This handbook outlines the policies, procedures, and expectations for all employees of Polaris Digitech. It covers topics such as conduct, benefits, and company culture...",
-        "HSE Policy": "Polaris Digitech is committed to providing a safe and healthy working environment for all employees, contractors, and visitors. This policy details our approach to Health, Safety, and Environment management...",
-        "Data Privacy Security Policy": "This policy establishes guidelines for the collection, use, storage, and disclosure of personal data to ensure compliance with data protection laws and safeguard sensitive information...",
-        "Procurement Policy": "This policy governs all procurement activities at Polaris Digitech, ensuring transparency, fairness, and cost-effectiveness in acquiring goods and services...",
-        "Password Secrecy Policy": "This policy sets forth the requirements for creating, using, and protecting passwords within Polaris Digitech to safeguard company information systems and data from unauthorized access."
-    }
     if not os.path.exists(HR_POLICIES_FILE) or os.path.getsize(HR_POLICIES_FILE) == 0:
         save_data(initial_policies, HR_POLICIES_FILE)
-        st.success("Initial HR policies created.")
+    if not os.path.exists(PAYROLL_FILE) or os.path.getsize(PAYROLL_FILE) == 0:
+        save_data(initial_payroll_data, PAYROLL_FILE)
+    # Ensure other files are initialized as empty lists if they don't exist
+    for filename in [LEAVE_REQUESTS_FILE, OPEX_CAPEX_REQUESTS_FILE, PERFORMANCE_GOALS_FILE,
+                     SELF_APPRAISALS_FILE, BENEFICIARIES_FILE, CHAT_MESSAGES_FILE,
+                     ATTENDANCE_RECORDS_FILE, DISCIPLINARY_RECORDS_FILE]:
+        if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+            save_data([], filename) # Save empty list to initialize
 
-    # Initial Beneficiaries Data (from prompt)
-    initial_beneficiaries = {
-        "Bestway Engineering Services Ltd": {"Account Name": "Benjamin", "Account No": "1234567890", "Bank": "GTB"},
-        "Alpha Link Technical Services": {"Account Name": "Oladele", "Account No": "2345678900", "Bank": "Access Bank"},
-        "AFLAC COM SPECs": {"Account Name": "Fasco", "Account No": "1234567890", "Bank": "Opay"},
-        "Emmafem Resources Nig. Ent.": {"Account Name": "Radius", "Account No": "2345678901", "Bank": "UBA"},
-        "Neptune Global Services": {"Account Name": "Folashade", "Account No": "12345678911", "Bank": "Union Bank"},
-        "Other (Manually Enter Details)": {"Account Name": "", "Account No": "", "Bank": ""} # Option for manual entry
-    }
-    if not os.path.exists(BENEFICIARIES_FILE) or os.path.getsize(BENEFICIARIES_FILE) == 0:
-        save_data(initial_beneficiaries, BENEFICIARIES_FILE)
-        st.success("Initial Beneficiaries data created.")
 
-# --- Session State Initialization ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'current_user' not in st.session_state: # Stores full user object if logged in
-    st.session_state.current_user = None
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = "login"
+# --- Authentication Functions ---
+def authenticate_user(username, password):
+    users = load_data(USERS_FILE)
+    for user in users:
+        if user["username"] == username and pbkdf2_sha256.verify(password, user["password"]):
+            return user
+    return None
 
-# Load all persistent data into session state
-st.session_state.users = load_data(USERS_FILE)
-st.session_state.leave_requests = load_data(LEAVE_REQUESTS_FILE, [])
-st.session_state.opex_capex_requests = load_data(OPEX_CAPEX_REQUESTS_FILE, [])
-st.session_state.performance_goals = load_data(PERFORMANCE_GOALS_FILE, [])
-st.session_state.self_appraisals = load_data(SELF_APPRAISALS_FILE, [])
-st.session_state.payroll_data = load_data(PAYROLL_FILE, []) # New payroll data
-st.session_state.beneficiaries = load_data(BENEFICIARIES_FILE, {}) # New beneficiaries data
-st.session_state.hr_policies = load_data(HR_POLICIES_FILE, {}) # New policies data
+def get_user_profile(staff_id):
+    users = load_data(USERS_FILE)
+    for user in users:
+        if user.get('profile', {}).get('staff_id') == staff_id:
+            return user.get('profile', {})
+    return None
 
-# Ensure payroll data has necessary columns for DataFrame creation
-# This handles cases where payroll.json might be empty or malformed initially
-if not st.session_state.payroll_data:
-    st.session_state.payroll_data = [] # Ensure it's an empty list if data is missing
+def get_user_by_staff_id(staff_id):
+    users = load_data(USERS_FILE)
+    for user in users:
+        if user.get('profile', {}).get('staff_id') == staff_id:
+            return user
+    return None
 
-# --- Common UI Elements ---
-def display_logo():
-    if os.path.exists(LOGO_PATH):
-        st.image(LOGO_PATH, width=150)
-    else:
-        st.error(f"Company logo not found at: {LOGO_PATH}")
-        st.warning(f"Please ensure '{LOGO_FILE_NAME}' is in '{ICON_BASE_DIR}'.")
+def get_user_name_by_staff_id(staff_id):
+    profile = get_user_profile(staff_id)
+    return profile.get('name', 'Unknown User')
 
-def display_sidebar():
-    st.sidebar.image(LOGO_PATH, width=200)
-    st.sidebar.title("Navigation")
-    st.sidebar.markdown("---")
-
-    # Dynamic sidebar based on user role
-    if st.session_state.logged_in:
-        st.sidebar.button("📊 Dashboard", key="nav_dashboard", on_click=lambda: st.session_state.update(current_page="dashboard"))
-        st.sidebar.button("📝 My Profile", key="nav_my_profile", on_click=lambda: st.session_state.update(current_page="my_profile"))
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("My Applications")
-        st.sidebar.button("🏖️ Apply for Leave", key="nav_apply_leave", on_click=lambda: st.session_state.update(current_page="leave_request"))
-        st.sidebar.button("👀 View My Leave", key="nav_view_my_leave", on_click=lambda: st.session_state.update(current_page="view_my_leave")) # New
-        st.sidebar.button("💲 OPEX/CAPEX Requisition", key="nav_submit_opex_capex", on_click=lambda: st.session_state.update(current_page="opex_capex_form"))
-        st.sidebar.button("👀 View My OPEX/CAPEX", key="nav_view_my_opex_capex", on_click=lambda: st.session_state.update(current_page="view_my_opex_capex")) # New
-        st.sidebar.button("📈 Performance Goal Setting", key="nav_performance_goals", on_click=lambda: st.session_state.update(current_page="performance_goal_setting"))
-        st.sidebar.button("👀 View My Goals", key="nav_view_my_goals", on_click=lambda: st.session_state.update(current_page="view_my_goals")) # New
-        st.sidebar.button("✍️ Self-Appraisal", key="nav_self_appraisal", on_click=lambda: st.session_state.update(current_page="self_appraisal"))
-        st.sidebar.button("👀 View My Appraisals", key="nav_view_my_appraisals", on_click=lambda: st.session_state.update(current_page="view_my_appraisals")) # New
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Company Resources")
-        st.sidebar.button("📄 HR Policies", key="nav_hr_policies", on_click=lambda: st.session_state.update(current_page="hr_policies"))
-        st.sidebar.button("💰 My Payslips", key="nav_my_payslips", on_click=lambda: st.session_state.update(current_page="my_payslips")) # New
-
-        # Determine if the current user is an approver for OPEX/CAPEX or Leave
-        is_approver = False
-        current_user_profile = st.session_state.current_user.get('profile', {})
-        current_user_department = current_user_profile.get('department')
-        current_user_grade = current_user_profile.get('grade_level')
-
-        # Check if the user's role/department/grade matches any of the approval chain roles
-        if st.session_state.current_user['role'] == 'admin': # Admin can manage all
-            is_approver = True
-        else: # Check if the staff member is a manager in a department that is part of the approval chain
-            for approver_role_info in APPROVAL_CHAIN:
-                if (current_user_department == approver_role_info['department'] and
-                        current_user_grade == approver_role_info['grade_level']):
-                    is_approver = True
-                    break
-
-        # Show admin/approver functions conditionally
-        if st.session_state.current_user and (st.session_state.current_user['role'] == 'admin' or is_approver):
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("Admin & Approver Functions")
-            if st.session_state.current_user['role'] == 'admin':
-                st.sidebar.button("👥 Manage Users", key="admin_manage_users", on_click=lambda: st.session_state.update(current_page="manage_users")) # New
-                st.sidebar.button("📤 Upload Payroll", key="admin_upload_payroll", on_click=lambda: st.session_state.update(current_page="upload_payroll")) # New
-                st.sidebar.button("🏦 Manage Beneficiaries", key="admin_manage_beneficiaries", on_click=lambda: st.session_state.update(current_page="manage_beneficiaries")) # New
-                st.sidebar.button("📜 Manage HR Policies", key="admin_manage_policies", on_click=lambda: st.session_state.update(current_page="manage_hr_policies")) # New
-            
-            # These buttons are visible to all eligible approvers (including admin)
-            st.sidebar.button("✅ Manage OPEX/CAPEX Approvals", key="admin_manage_approvals", on_click=lambda: st.session_state.update(current_page="manage_opex_capex_approvals")) # New
-            st.sidebar.button("✅ Manage Leave Approvals", key="admin_manage_leave_approvals", on_click=lambda: st.session_state.update(current_page="manage_leave_approvals")) # NEWLY ADDED
-
-        st.sidebar.markdown("---")
-        st.sidebar.button("Logout", key="nav_logout", on_click=logout)
-    else:
-        st.sidebar.info("Please log in to access the portal.")
-
-def logout():
-    st.session_state.logged_in = False
-    st.session_state.current_user = None
-    st.session_state.current_page = "login"
-    st.rerun()
-
-# --- Login Form ---
-def login_form():
-    st.title("Polaris Digitech Staff Portal - Login")
-    col1, col2, col3 = st.columns([1,2,1])
+# --- Layout Components ---
+def display_logo_and_title():
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width=100)
+        else:
+            st.warning(f"Logo file not found at {LOGO_PATH}")
     with col2:
-        username_input = st.text_input("User ID", key="login_username_input")
-        password_input = st.text_input("Password", type="password", key="login_password_input")
+        st.title("Polaris Digitech HR Portal")
+    st.markdown("---")
 
-        if st.button("Login", key="login_button"):
-            found_user = None
-            for user in st.session_state.users:
-                # Check for both username and email (for admin login)
-                if user['username'] == username_input:
-                    if pbkdf2_sha256.verify(password_input, user['password']):
-                        found_user = user
-                        break
-            
-            if found_user:
-                st.session_state.logged_in = True
-                st.session_state.current_user = found_user
-                st.success("Logged in successfully!")
-                st.session_state.current_page = "dashboard"
-                st.rerun()
-            else:
-                st.error("Invalid credentials")
-
-# --- Dashboard Display ---
 def display_dashboard():
-    st.title("📊 Polaris Digitech HR Portal - Dashboard")
+    st.header(f"Welcome, {st.session_state.current_user['profile']['name']}!")
+    st.write("This is your personalized HR dashboard.")
 
-    if st.session_state.current_user:
-        current_user_profile = st.session_state.current_user.get('profile', {})
-        st.markdown(f"## Welcome, {current_user_profile.get('name', st.session_state.current_user['username']).title()}!")
-        
-        # Ensure staff_id is displayed from profile
-        staff_id_display = current_user_profile.get('staff_id', 'N/A')
-        st.write(f"Your Staff ID: **{staff_id_display}**")
-        
-        st.write(f"Department: **{current_user_profile.get('department', 'N/A')}**")
+    # Fetch all data needed for dashboard insights
+    users = load_data(USERS_FILE)
+    leave_requests = load_data(LEAVE_REQUESTS_FILE)
+    opex_capex_requests = load_data(OPEX_CAPEX_REQUESTS_FILE)
+    performance_goals = load_data(PERFORMANCE_GOALS_FILE)
 
-        st.markdown("---")
-        st.subheader("Upcoming Birthdays")
-        today = date.today()
-        upcoming_birthdays = []
-        for user in st.session_state.users:
-            profile = user.get('profile', {})
-            dob_str = profile.get('date_of_birth')
-            name = profile.get('name')
-            if dob_str and name:
-                try:
-                    dob = datetime.strptime(dob_str, '%Y-%m-%d').date()
-                    # Calculate birthday for current year
-                    birthday_this_year = dob.replace(year=today.year)
-                    # If birthday already passed this year, check next year
-                    if birthday_this_year < today:
-                        birthday_this_year = dob.replace(year=today.year + 1)
-                    
-                    days_until_birthday = (birthday_this_year - today).days
+    st.subheader("Key HR Metrics")
+    col1, col2, col3 = st.columns(3)
 
-                    if 0 <= days_until_birthday <= 30: # Within next 30 days
-                        upcoming_birthdays.append({
-                            "Name": name,
-                            "Birthday": birthday_this_year.strftime('%B %d'),
-                            "Days Until": days_until_birthday
-                        })
-                except ValueError:
-                    continue # Skip if DOB is malformed
+    # Metric 1: Total Employees
+    total_employees = len(users)
+    col1.metric("Total Employees", total_employees)
 
-        if upcoming_birthdays:
-            df_birthdays = pd.DataFrame(upcoming_birthdays).sort_values(by="Days Until")
-            st.dataframe(df_birthdays, use_container_width=True, hide_index=True)
-            if any(b['Days Until'] == 0 for b in upcoming_birthdays):
-                st.balloons()
-                st.success("🎉 Happy Birthday to our staff members today! 🎉")
-        else:
-            st.info("No upcoming birthdays in the next 30 days.")
+    # Metric 2: Pending Leave Requests (for HR Manager)
+    pending_leave_requests_count = len([req for req in leave_requests if req.get('status') == 'Pending'])
+    col2.metric("Pending Leave Requests", pending_leave_requests_count)
 
-        st.markdown("---")
-        st.subheader("HR Analytics Overview")
+    # Metric 3: Pending OPEX/CAPEX Approvals (overall)
+    pending_opex_capex_count = len([req for req in opex_capex_requests if req.get('final_status') == 'Pending'])
+    col3.metric("Pending OPEX/CAPEX Approvals", pending_opex_capex_count)
 
-        total_employees = len(st.session_state.users)
-        st.metric("Total Employees", total_employees)
+    st.markdown("---")
 
-        # Staff Distribution by Department
-        if st.session_state.users:
-            departments = [user.get('profile', {}).get('department', 'Unassigned') for user in st.session_state.users]
-            df_departments = pd.DataFrame(departments, columns=['Department'])
-            dept_counts = df_departments['Department'].value_counts().reset_index()
-            dept_counts.columns = ['Department', 'Count']
-            fig_dept = px.pie(dept_counts, values='Count', names='Department', title='Staff Distribution by Department', hole=0.3)
-            st.plotly_chart(fig_dept, use_container_width=True)
-
-            # Staff Distribution by Gender
-            genders = [user.get('profile', {}).get('gender', 'N/A') for user in st.session_state.users]
-            df_genders = pd.DataFrame(genders, columns=['Gender'])
-            gender_counts = df_genders['Gender'].value_counts().reset_index()
-            gender_counts.columns = ['Gender', 'Count']
-            fig_gender = px.pie(gender_counts, values='Count', names='Gender', title='Staff Distribution by Gender', hole=0.3)
-            st.plotly_chart(fig_gender, use_container_width=True)
-        else:
-            st.info("No staff data to display distributions.")
-
-        # Staff On Leave
-        current_on_leave = 0
-        today = date.today()
-        for req in st.session_state.leave_requests:
-            try:
-                start_date = datetime.strptime(req.get('start_date', '1900-01-01'), '%Y-%m-%d').date()
-                end_date = datetime.strptime(req.get('end_date', '1900-01-01'), '%Y-%m-%d').date()
-                if start_date <= today <= end_date and req.get('status') == 'Approved':
-                    current_on_leave += 1
-            except ValueError:
-                continue # Skip malformed date entries
-        st.metric("Staff Currently On Leave (Approved)", current_on_leave)
-
-        st.markdown("---")
-        st.subheader("Your Pending Requests")
-    # 🔔 Notify if current user is an approver on any pending requests
+    # Display pending approvals if the user is an approver
     current_user_profile = st.session_state.current_user.get('profile', {})
     current_user_department = current_user_profile.get('department')
     current_user_grade = current_user_profile.get('grade_level')
-    
-    pending_approver_tasks_count = 0
-    
-    for req in st.session_state.opex_capex_requests:
-        # Determine the current approver role for this request
-        current_stage_index = req.get('current_approval_stage', 0)
-        if current_stage_index < len(APPROVAL_CHAIN):
-            expected_approver_stage = APPROVAL_CHAIN[current_stage_index]
-            
-            # Check if the current user matches the expected approver for this stage
-            is_current_approver = (
-                current_user_department == expected_approver_stage['department'] and
-                current_user_grade == expected_approver_stage['grade_level'] and
-                req.get('final_status') == "Pending" # Ensure overall request is still pending
-            )
-            if is_current_approver:
-                # Additional check to see if this specific stage is pending
-                stage_status_key = f"status_{expected_approver_stage['role_name'].lower().replace(' ', '_')}"
-                if req.get(stage_status_key) == "Pending":
-                    pending_approver_tasks_count += 1
 
-    # Check for pending leave requests for admin
-    pending_leave_approvals_count = len([req for req in st.session_state.leave_requests if req.get('status') == 'Pending' and st.session_state.current_user['role'] == 'admin'])
-    if pending_leave_approvals_count > 0:
-        st.warning(f"🔔 You have {pending_leave_approvals_count} leave request(s) awaiting your approval.")
-        pending_approver_tasks_count += pending_leave_approvals_count # Sum up all pending approvals
+    is_approver = False
+    approver_role_name = None
+    for role_info in APPROVAL_CHAIN:
+        if (role_info['department'] == current_user_department and
+                role_info['grade_level'] == current_user_grade):
+            is_approver = True
+            approver_role_name = role_info['role_name']
+            break
 
-
-    if pending_approver_tasks_count > 0:
-        st.warning(f"🔔 You have {pending_approver_tasks_count} pending approval task(s) in total.")
-
+    if is_approver:
+        st.subheader(f"Your Role: {approver_role_name}")
         
-        user_pending_leave = [
-            req for req in st.session_state.leave_requests 
-            if req.get('staff_id') == current_user_profile.get('staff_id') and req.get('status') == 'Pending'
-        ]
-        user_pending_opex_capex = [
-            req for req in st.session_state.opex_capex_requests 
-            if req.get('requester_staff_id') == current_user_profile.get('staff_id') and req.get('final_status') == 'Pending'
+        # Ensure 'current_approver_role' exists for all requests before filtering
+        pending_requests = [
+            req for req in opex_capex_requests
+            if req.get('current_approver_role') == approver_role_name and req.get('final_status') == 'Pending'
         ]
 
-        if user_pending_leave:
-            st.info(f"You have {len(user_pending_leave)} pending leave requests.")
-        if user_pending_opex_capex:
-            st.info(f"You have {len(user_pending_opex_capex)} pending OPEX/CAPEX requests.")
-        if not user_pending_leave and not user_pending_opex_capex and pending_approver_tasks_count == 0:
-            st.info("You have no pending requests.")
+        if pending_requests:
+            st.warning(f"You have {len(pending_requests)} pending OPEX/CAPEX requests to approve!")
+            # Select relevant columns for display in dashboard summary
+            df_pending = pd.DataFrame(pending_requests)
+            st.dataframe(df_pending[['request_id', 'requester_name', 'request_type', 'total_amount', 'submission_date']])
+            if st.button("Go to Approvals"):
+                st.session_state.current_page = "manage_opex_capex_approvals"
+                st.rerun()
+        else:
+            st.info("No pending OPEX/CAPEX requests for your approval at this time.")
 
-
-    else:
-        st.info("You have no pending requests.") # Changed from warning to info when no pending tasks
-        # If no pending tasks for approver, still show user's own requests
-        user_pending_leave = [
-            req for req in st.session_state.leave_requests 
-            if req.get('staff_id') == current_user_profile.get('staff_id') and req.get('status') == 'Pending'
+    # Display pending leave requests if the user is an HR Manager
+    if current_user_department == "HR" and current_user_grade == "Manager":
+        pending_leave_requests = [
+            req for req in leave_requests if req.get('status') == 'Pending'
         ]
-        user_pending_opex_capex = [
-            req for req in st.session_state.opex_capex_requests 
-            if req.get('requester_staff_id') == current_user_profile.get('staff_id') and req.get('final_status') == 'Pending'
-        ]
+        if pending_leave_requests:
+            st.warning(f"You have {len(pending_leave_requests)} pending leave requests to review!")
+            st.dataframe(pd.DataFrame(pending_leave_requests))
+            if st.button("Go to Leave Approvals"):
+                st.session_state.current_page = "admin_manage_leave"
+                st.rerun()
+        else:
+            st.info("No pending leave requests for HR review at this time.")
 
-        if user_pending_leave:
-            st.info(f"You have {len(user_pending_leave)} pending leave requests.")
-        if user_pending_opex_capex:
-            st.info(f"You have {len(user_pending_opex_capex)} pending OPEX/CAPEX requests.")
-        if not user_pending_leave and not user_pending_opex_capex:
-            st.info("You have no pending requests (either as requester or approver).")
+    # Display unread chat messages
+    unread_messages_count = get_unread_messages(st.session_state.current_user['profile']['staff_id'])
+    if unread_messages_count > 0: # Check if count is greater than 0
+        st.info(f"You have {unread_messages_count} unread chat messages! Go to Chat to view them.") # Removed len()
+        if st.button("Go to Chat"):
+            st.session_state.current_page = "chat"
+            st.rerun()
 
     st.markdown("---")
-    st.subheader("Quick Access: Your Applications")
-    current_user_staff_id = current_user_profile.get('staff_id', 'N/A')
+    st.subheader("Company Overview Infographics")
 
-    # Display Your Leave History on Dashboard
-    st.markdown("#### Your Leave Applications")
-    user_leave_history = [
-        req for req in st.session_state.leave_requests
-        if req.get('staff_id') == current_user_staff_id # Use the corrected staff ID
-    ]
-    if user_leave_history:
-        df_leave = pd.DataFrame(user_leave_history)
-        df_leave_display = df_leave[['submission_date', 'leave_type', 'start_date', 'end_date', 'num_days', 'status']]
-        st.dataframe(df_leave_display, use_container_width=True, hide_index=True)
+    col_chart1, col_chart2 = st.columns(2)
+
+    # Chart 1: Employee Distribution by Department
+    if users:
+        df_users = pd.DataFrame(users)
+        df_users['Department'] = df_users['profile'].apply(lambda x: x.get('department', 'N/A'))
+        dept_counts = df_users['Department'].value_counts().reset_index()
+        dept_counts.columns = ['Department', 'Number of Employees']
+        fig_dept = px.bar(dept_counts, x='Department', y='Number of Employees',
+                          title='Employee Distribution by Department',
+                          color='Department',
+                          template='plotly_white')
+        col_chart1.plotly_chart(fig_dept, use_container_width=True)
     else:
-        st.info("You have not submitted any leave requests yet.")
-    st.button("View All My Leave Applications", key="dashboard_view_all_leave", on_click=lambda: st.session_state.update(current_page="view_my_leave"))
+        col_chart1.info("No employee data to display department distribution.")
 
-    st.markdown("#### Your OPEX/CAPEX Requisitions")
-    user_opex_capex_history = [
-        req for req in st.session_state.opex_capex_requests
-        if req.get('requester_staff_id') == current_user_staff_id # Use the corrected staff ID
-    ]
-    if user_opex_capex_history:
-        df_opex_capex = pd.DataFrame(user_opex_capex_history)
-        display_cols = [
-            'submission_date', 'request_type', 'item_description', 'expense_line',
-            'material_cost', 'labor_cost', 'total_amount', 'wht_percentage',
-            'wht_amount', 'net_amount_payable', 'budget_balance',
-            'final_status'
-        ]
-        # Add individual stage statuses if they exist and are relevant
-        for stage in APPROVAL_CHAIN:
-            display_cols.append(f"status_{stage['role_name'].lower().replace(' ', '_')}")
-            
-        # Filter for only existing columns to prevent errors if older entries don't have new fields
-        existing_cols = [col for col in display_cols if col in df_opex_capex.columns]
-        st.dataframe(df_opex_capex[existing_cols], use_container_width=True, hide_index=True)
+    # Chart 2: Employee Distribution by Gender
+    if users:
+        df_users = pd.DataFrame(users)
+        df_users['Gender'] = df_users['profile'].apply(lambda x: x.get('gender', 'N/A'))
+        gender_counts = df_users['Gender'].value_counts().reset_index()
+        gender_counts.columns = ['Gender', 'Number of Employees']
+        fig_gender = px.pie(gender_counts, values='Number of Employees', names='Gender',
+                            title='Employee Distribution by Gender',
+                            hole=.3)
+        col_chart2.plotly_chart(fig_gender, use_container_width=True)
     else:
-        st.info("You have not submitted any OPEX/CAPEX requisitions yet.")
-    st.button("View All My OPEX/CAPEX Requisitions", key="dashboard_view_all_opex_capex", on_click=lambda: st.session_state.update(current_page="view_my_opex_capex"))
+        col_chart2.info("No employee data to display gender distribution.")
 
-# --- My Profile Display ---
-def display_my_profile():
-    st.title("📝 My Profile")
-    user_profile = st.session_state.current_user.get('profile', {})
-    
-    if user_profile:
-        st.subheader("Personal Information")
-        st.write(f"**Name:** {user_profile.get('name')}")
-        st.write(f"**Staff ID:** {user_profile.get('staff_id')}")
-        st.write(f"**Date of Birth:** {user_profile.get('date_of_birth')}")
-        st.write(f"**Gender:** {user_profile.get('gender')}")
-        st.write(f"**Address:** {user_profile.get('address')}")
-        st.write(f"**Phone Number:** {user_profile.get('phone_number')}")
-        st.write(f"**Email Address:** {user_profile.get('email_address')}")
+    st.markdown("---")
+    st.subheader("Quick Actions")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("🌴 Request Leave", use_container_width=True):
+            st.session_state.current_page = "request_leave"
+            st.rerun()
+    with col2:
+        if st.button("💰 Request OPEX/CAPEX", use_container_width=True):
+            st.session_state.current_page = "request_opex_capex"
+            st.rerun()
+    with col3:
+        if st.button("🎯 Set Performance Goals", use_container_width=True):
+            st.session_state.current_page = "set_performance_goals"
+            st.rerun()
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        if st.button("📝 Submit Self-Appraisal", use_container_width=True):
+            st.session_state.current_page = "submit_self_appraisal"
+            st.rerun()
+    with col5:
+        if st.button("💸 View Payslip", use_container_width=True):
+            st.session_state.current_page = "view_payslip"
+            st.rerun()
+    with col6:
+        if st.button("📜 View Company Policy", use_container_width=True):
+            st.session_state.current_page = "view_company_policy"
+            st.rerun()
 
-        st.subheader("Employment Details")
-        st.write(f"**Department:** {user_profile.get('department')}")
-        st.write(f"**Grade Level:** {user_profile.get('grade_level')}")
-        st.write(f"**Work Anniversary:** {user_profile.get('work_anniversary')}")
-        
-        st.subheader("Education & Experience")
-        st.write(f"**Education Background:** {user_profile.get('education_background')}")
-        st.write(f"**Professional Experience:** {user_profile.get('professional_experience')}")
 
-        st.subheader("Training Attended")
-        if user_profile.get('training_attended'):
-            for i, training in enumerate(user_profile['training_attended']):
-                st.write(f"- {training}")
-        else:
-            st.info("No training records found.")
+# --- User Management (Admin Only) ---
+def admin_manage_users():
+    st.header("Manage Users")
+    users = load_data(USERS_FILE)
+
+    if not users:
+        st.info("No users found.")
+        return
+
+    st.subheader("Existing Users")
+    # Manually extract and flatten profile data to avoid duplicate column names
+    display_data = []
+    for user in users:
+        user_display = {
+            "Username": user.get('username'),
+            "Role": user.get('role').capitalize()
+        }
+        profile = user.get('profile', {})
+        user_display["Staff ID"] = profile.get('staff_id')
+        user_display["Full Name"] = profile.get('name')
+        user_display["Department"] = profile.get('department')
+        user_display["Grade Level"] = profile.get('grade_level')
+        user_display["Email Address"] = profile.get('email_address')
+        user_display["Date of Birth"] = profile.get('date_of_birth')
+        user_display["Gender"] = profile.get('gender')
+        user_display["Phone Number"] = profile.get('phone_number')
+        user_display["Address"] = profile.get('address')
+        user_display["Education Background"] = profile.get('education_background')
+        user_display["Professional Experience"] = profile.get('professional_experience')
+        user_display["Work Anniversary"] = profile.get('work_anniversary')
+        display_data.append(user_display)
+
+    df_users_display = pd.DataFrame(display_data)
+    st.dataframe(df_users_display, use_container_width=True)
+
+    st.subheader("Add New User")
+    with st.form("add_user_form"):
+        new_username = st.text_input("Username (Email)")
+        new_password = st.text_input("Password", type="password")
+        new_role = st.selectbox("Role", ["staff", "admin"])
+
+        st.markdown("---")
+        st.subheader("User Profile Details")
+        new_name = st.text_input("Full Name")
+        new_staff_id = st.text_input("Staff ID")
+        new_dob = st.date_input("Date of Birth", value=date(2000, 1, 1))
+        new_gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+        new_grade_level = st.text_input("Grade Level")
+        new_department = st.text_input("Department")
+        new_education = st.text_area("Education Background")
+        new_experience = st.text_area("Professional Experience")
+        new_address = st.text_area("Address")
+        new_phone = st.text_input("Phone Number")
+        new_email = st.text_input("Email Address")
+        new_work_anniversary = st.date_input("Work Anniversary", value=date(datetime.now().year, 1, 1))
+
+        add_user_submitted = st.form_submit_button("Add User")
+
+        if add_user_submitted:
+            if new_username and new_password and new_name and new_staff_id:
+                if any(u['username'] == new_username for u in users):
+                    st.error("Username already exists.")
+                elif any(u.get('profile', {}).get('staff_id') == new_staff_id for u in users):
+                    st.error("Staff ID already exists.")
+                else:
+                    new_user = {
+                        "username": new_username,
+                        "password": pbkdf2_sha256.hash(new_password),
+                        "role": new_role,
+                        "profile": {
+                            "name": new_name,
+                            "staff_id": new_staff_id,
+                            "date_of_birth": new_dob.isoformat(),
+                            "gender": new_gender,
+                            "grade_level": new_grade_level,
+                            "department": new_department,
+                            "education_background": new_education,
+                            "professional_experience": new_experience,
+                            "address": new_address,
+                            "phone_number": new_phone,
+                            "email_address": new_email,
+                            "training_attended": [],
+                            "work_anniversary": new_work_anniversary.isoformat()
+                        }
+                    }
+                    users.append(new_user)
+                    save_data(users, USERS_FILE)
+                    st.success(f"User '{new_username}' added successfully!")
+                    st.rerun()
+            else:
+                st.error("Please fill in username, password, name, and staff ID.")
+
+    st.subheader("Edit/Delete User")
+    if users:
+        user_to_edit_delete = st.selectbox("Select User by Username", [""] + [u['username'] for u in users])
+        if user_to_edit_delete:
+            user_data = next((u for u in users if u['username'] == user_to_edit_delete), None)
+            if user_data:
+                user_index = users.index(user_data)
+                st.write(f"Editing user: {user_data['username']}")
+
+                with st.form("edit_user_form"):
+                    edited_name = st.text_input("Full Name", value=user_data['profile']['name'])
+                    edited_staff_id = st.text_input("Staff ID", value=user_data['profile']['staff_id'], disabled=True) # Staff ID usually not editable
+                    edited_dob = st.date_input("Date of Birth", value=date.fromisoformat(user_data['profile']['date_of_birth']))
+                    edited_gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=["Male", "Female", "Other"].index(user_data['profile']['gender']))
+                    edited_grade_level = st.text_input("Grade Level", value=user_data['profile']['grade_level'])
+                    edited_department = st.text_input("Department", value=user_data['profile']['department'])
+                    edited_education = st.text_area("Education Background", value=user_data['profile']['education_background'])
+                    edited_experience = st.text_area("Professional Experience", value=user_data['profile']['professional_experience'])
+                    edited_address = st.text_area("Address", value=user_data['profile']['address'])
+                    edited_phone = st.text_input("Phone Number", value=user_data['profile']['phone_number'])
+                    edited_email = st.text_input("Email Address", value=user_data['profile']['email_address'])
+                    edited_work_anniversary = st.date_input("Work Anniversary", value=date(datetime.now().year, 1, 1))
+                    edited_role = st.selectbox("Role", ["staff", "admin"], index=["staff", "admin"].index(user_data['role']))
+
+                    col_edit, col_delete = st.columns(2)
+                    with col_edit:
+                        edit_user_submitted = st.form_submit_button("Update User")
+                    with col_delete:
+                        delete_user_submitted = st.form_submit_button("Delete User")
+
+                    if edit_user_submitted:
+                        users[user_index]['profile']['name'] = edited_name
+                        users[user_index]['profile']['date_of_birth'] = edited_dob.isoformat()
+                        users[user_index]['profile']['gender'] = edited_gender
+                        users[user_index]['profile']['grade_level'] = edited_grade_level
+                        users[user_index]['profile']['department'] = edited_department
+                        users[user_index]['profile']['education_background'] = edited_education
+                        users[user_index]['profile']['professional_experience'] = edited_experience
+                        users[user_index]['profile']['address'] = edited_address
+                        users[user_index]['profile']['phone_number'] = edited_phone
+                        users[user_index]['profile']['email_address'] = edited_email
+                        users[user_index]['profile']['work_anniversary'] = edited_work_anniversary.isoformat()
+                        users[user_index]['role'] = edited_role
+                        save_data(users, USERS_FILE)
+                        st.success(f"User '{user_to_edit_delete}' updated successfully!")
+                        st.rerun()
+
+                    if delete_user_submitted:
+                        if st.session_state.current_user['username'] == user_to_edit_delete:
+                            st.error("You cannot delete your own account while logged in.")
+                        else:
+                            del users[user_index]
+                            save_data(users, USERS_FILE)
+                            st.success(f"User '{user_to_edit_delete}' deleted successfully!")
+                            st.rerun()
     else:
-        st.error("User profile not found.")
+        st.info("No users to edit or delete.")
 
-# --- Leave Request Form ---
-def leave_request_form():
-    st.title("🏖️ Apply for Leave")
-    current_user_profile = st.session_state.current_user.get('profile', {})
-    requester_name = current_user_profile.get('name', 'N/A')
-    requester_staff_id = current_user_profile.get('staff_id', 'N/A')
+# --- Leave Management (Staff & Admin) ---
+def request_leave():
+    st.header("Request Leave")
+    current_user_staff_id = st.session_state.current_user['profile']['staff_id']
+    leave_requests = load_data(LEAVE_REQUESTS_FILE)
 
-    st.write(f"Requesting as: **{requester_name}** (Staff ID: **{requester_staff_id}**)")
+    st.subheader("Submit New Leave Request")
+    with st.form("leave_request_form"):
+        leave_type = st.selectbox("Leave Type", ["Annual Leave", "Sick Leave", "Maternity Leave", "Paternity Leave", "Compassionate Leave", "Study Leave", "Other"])
+        start_date = st.date_input("Start Date", value=datetime.now().date())
+        end_date = st.date_input("End Date", value=datetime.now().date() + timedelta(days=7))
+        reason = st.text_area("Reason for Leave")
+        supporting_document = st.file_uploader("Upload Supporting Document (Optional)", type=["pdf", "jpg", "png"])
 
-    with st.form("leave_request_form", clear_on_submit=True):
-        leave_type = st.selectbox("Leave Type", ["Annual Leave", "Sick Leave", "Maternity Leave", "Paternity Leave", "Compassionate Leave", "Study Leave", "Unpaid Leave"])
-        start_date = st.date_input("Start Date", date.today())
-        end_date = st.date_input("End Date", date.today() + timedelta(days=7))
-        reason = st.text_area("Reason for Leave", "e.g., Annual vacation, Medical appointment, Family emergency.")
-        
-        uploaded_file = st.file_uploader("Upload Supporting Document (Optional)", type=["pdf", "jpg", "png"], key="leave_doc_uploader")
-
-        submitted = st.form_submit_button("Submit Leave Request")
+        submitted = st.form_submit_button("Submit Request")
 
         if submitted:
             if start_date > end_date:
                 st.error("End Date cannot be before Start Date.")
             else:
-                num_days = (end_date - start_date).days + 1
-                new_request_id = f"LEAVE-{len(st.session_state.leave_requests) + 1:04d}"
-                
-                file_path = save_uploaded_file(uploaded_file, "leave_documents") if uploaded_file else None
-
+                duration_days = (end_date - start_date).days + 1
+                doc_path = save_uploaded_file(supporting_document, "leave_documents")
                 new_request = {
-                    "request_id": new_request_id,
-                    "staff_id": requester_staff_id,
-                    "requester_name": requester_name,
+                    "request_id": str(uuid.uuid4()),
+                    "requester_staff_id": current_user_staff_id,
+                    "requester_name": st.session_state.current_user['profile']['name'],
                     "leave_type": leave_type,
                     "start_date": start_date.isoformat(),
                     "end_date": end_date.isoformat(),
-                    "num_days": num_days,
+                    "duration_days": duration_days,
                     "reason": reason,
-                    "document_path": file_path,
-                    "submission_date": datetime.now().isoformat(),
+                    "document_path": doc_path,
                     "status": "Pending", # Initial status
-                    "admin_comment": "" # To be filled by admin
+                    "request_date": datetime.now().isoformat()
                 }
-                st.session_state.leave_requests.append(new_request)
-                save_data(st.session_state.leave_requests, LEAVE_REQUESTS_FILE)
-                st.success("Leave request submitted successfully! It is now pending approval.")
+                leave_requests.append(new_request)
+                save_data(leave_requests, LEAVE_REQUESTS_FILE)
+                st.success("Leave request submitted successfully! Awaiting HR approval.")
                 st.rerun()
 
-# --- View My Leave Requests ---
-def view_my_leave_requests():
-    st.title("👀 My Leave Applications")
-    current_user_staff_id = st.session_state.current_user.get('profile', {}).get('staff_id')
-
-    user_leave_requests = [
-        req for req in st.session_state.leave_requests
-        if req.get('staff_id') == current_user_staff_id
-    ]
-
-    if user_leave_requests:
-        df_leave = pd.DataFrame(user_leave_requests)
-        df_leave_display = df_leave[['request_id', 'submission_date', 'leave_type', 'start_date', 'end_date', 'num_days', 'status', 'reason']]
-        st.dataframe(df_leave_display, use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-        st.subheader("Request Details and Documents")
-        selected_request_id = st.selectbox("Select a Request to View Details", [req['request_id'] for req in user_leave_requests])
+    st.subheader("Your Leave Request History")
+    user_requests = [req for req in leave_requests if req['requester_staff_id'] == current_user_staff_id]
+    if user_requests:
+        df_user_requests = pd.DataFrame(user_requests)
+        # Display relevant columns
+        # Ensure 'duration_days' and 'request_date' columns exist before displaying
+        display_cols = ['request_id', 'leave_type', 'start_date', 'end_date', 'status']
+        if 'duration_days' in df_user_requests.columns:
+            display_cols.append('duration_days')
+        if 'request_date' in df_user_requests.columns:
+            display_cols.append('request_date')
         
-        if selected_request_id:
-            selected_request = next((req for req in user_leave_requests if req['request_id'] == selected_request_id), None)
-            if selected_request:
-                st.json(selected_request)
-                if selected_request.get('document_path') and os.path.exists(selected_request['document_path']):
-                    st.write("### Supporting Document:")
-                    with open(selected_request['document_path'], "rb") as file:
-                        btn = st.download_button(
-                            label="Download Document",
-                            data=file,
-                            file_name=os.path.basename(selected_request['document_path']),
-                            mime="application/octet-stream"
-                        )
-                else:
-                    st.info("No supporting document uploaded for this request.")
+        st.dataframe(df_user_requests[display_cols])
     else:
         st.info("You have not submitted any leave requests yet.")
 
+def admin_manage_leave():
+    st.header("Manage Leave Requests (HR)")
+    leave_requests = load_data(LEAVE_REQUESTS_FILE)
 
-# --- OPEX/CAPEX Requisition Form ---
-def opex_capex_form():
-    st.title("💲 OPEX/CAPEX Requisition")
-    current_user_profile = st.session_state.current_user.get('profile', {})
-    requester_name = current_user_profile.get('name', 'N/A')
-    requester_staff_id = current_user_profile.get('staff_id', 'N/A')
-    requester_department = current_user_profile.get('department', 'N/A')
+    if not leave_requests:
+        st.info("No leave requests submitted yet.")
+        return
 
-    st.write(f"Requesting as: **{requester_name}** (Staff ID: **{requester_staff_id}**)")
-    st.write(f"Department: **{requester_department}**")
+    st.subheader("All Leave Requests")
+    df_leave_requests = pd.DataFrame(leave_requests)
+    st.dataframe(df_leave_requests)
 
-    # Load beneficiaries for the dropdown
-    beneficiary_options = list(st.session_state.beneficiaries.keys())
-    # Add an option for manual entry if it's not already there
-    if "Other (Manually Enter Details)" not in beneficiary_options:
-        beneficiary_options.append("Other (Manually Enter Details)")
+    st.subheader("Leave Request Statistics")
+    if not df_leave_requests.empty:
+        # Pie chart for Leave Type Distribution
+        leave_type_counts = df_leave_requests['leave_type'].value_counts().reset_index()
+        leave_type_counts.columns = ['Leave Type', 'Count']
+        fig_leave_type = px.pie(leave_type_counts, values='Count', names='Leave Type',
+                                title='Leave Type Distribution',
+                                hole=.3)
+        st.plotly_chart(fig_leave_type, use_container_width=True)
 
-
-    with st.form("opex_capex_form", clear_on_submit=True):
-        request_type = st.selectbox("Request Type", ["OPEX (Operating Expenditure)", "CAPEX (Capital Expenditure)"])
-        item_description = st.text_area("Item/Service Description", help="e.g., Purchase of new server, Office furniture repair, Consulting services")
-
-        # NEW: Expense Line dropdown and Budgeted Amount display
-        expense_line_options = ["Select an Expense Line"] + sorted(list(EXPENSE_LINES_BUDGET.keys()))
-        selected_expense_line = st.selectbox("Expense Line", expense_line_options)
-
-        budgeted_amount = 0.0
-        if selected_expense_line != "Select an Expense Line":
-            budgeted_amount = EXPENSE_LINES_BUDGET.get(selected_expense_line, 0.0)
-            st.info(f"Budgeted Amount for '{selected_expense_line}': ₦{budgeted_amount:,.2f}")
+        # Bar chart for Total Leave Days by Type
+        # Ensure 'duration_days' column exists before grouping
+        if 'duration_days' in df_leave_requests.columns:
+            leave_days_by_type = df_leave_requests.groupby('leave_type')['duration_days'].sum().reset_index()
+            leave_days_by_type.columns = ['Leave Type', 'Total Days']
+            fig_leave_days = px.bar(leave_days_by_type, x='Leave Type', y='Total Days',
+                                    title='Total Leave Days Taken by Type',
+                                    color='Leave Type',
+                                    template='plotly_white')
+            st.plotly_chart(fig_leave_days, use_container_width=True)
         else:
-            st.warning("Please select an Expense Line to see the budgeted amount.")
-        
-        st.markdown("---")
-        st.subheader("Cost Breakdown")
-        col_mat, col_lab = st.columns(2)
-        with col_mat:
-            material_cost = st.number_input("Material Cost (₦)", min_value=0.0, format="%.2f")
-        with col_lab:
-            labor_cost = st.number_input("Labor Cost (₦)", min_value=0.0, format="%.2f")
-
-        total_amount = material_cost + labor_cost
-        st.markdown(f"**Total Amount: ₦{total_amount:,.2f}**")
-
-        # NEW: WHT and Net Amount Payable
-        wht_options = {"0%": 0.0, "5%": 0.05, "10%": 0.10, "15%": 0.15}
-        selected_wht_label = st.selectbox("Withholding Tax (WHT) on Labor Cost", list(wht_options.keys()), index=0)
-        wht_percentage = wht_options[selected_wht_label]
-        
-        wht_amount = labor_cost * wht_percentage
-        net_amount_payable = total_amount - wht_amount
-
-        st.info(f"WHT Amount ({selected_wht_label} of Labor Cost): ₦{wht_amount:,.2f}")
-        st.success(f"**Net Amount Payable: ₦{net_amount_payable:,.2f}**")
-
-        # NEW: Budget Balance
-        budget_balance = budgeted_amount - net_amount_payable
-        if selected_expense_line != "Select an Expense Line":
-            st.metric("Budget Balance", f"₦{budget_balance:,.2f}")
-            if budget_balance < 0:
-                st.error("Warning: This request exceeds the budgeted amount for the selected Expense Line!")
-        else:
-            st.info("Select an Expense Line to see the budget balance.")
-        st.markdown("---")
+            st.info("Cannot display 'Total Leave Days Taken by Type' chart: 'duration_days' column not found in leave requests.")
+    else:
+        st.info("No leave data to generate statistics.")
 
 
-        justification = st.text_area("Justification/Purpose of Request", help="Clearly explain why this item/service is needed and its benefit.")
+    st.subheader("Approve/Reject Leave Requests")
+    pending_requests = [req for req in leave_requests if req['status'] == 'Pending']
+    if pending_requests:
+        request_to_review = st.selectbox(
+            "Select a pending request to review:",
+            [""] + [f"{req['requester_name']} ({req['leave_type']} from {req['start_date']} to {req['end_date']})"
+                    for req in pending_requests],
+            format_func=lambda x: x if x else "Select a request"
+        )
 
-        st.subheader("Vendor Details")
-        selected_beneficiary_name = st.selectbox("Select Vendor/Beneficiary", beneficiary_options)
-        
-        vendor_name = ""
-        vendor_account_name = ""
-        vendor_account_no = ""
-        vendor_bank = ""
+        if request_to_review:
+            selected_request = next(req for req in pending_requests if f"{req['requester_name']} ({req['leave_type']} from {req['start_date']} to {req['end_date']})" == request_to_review)
+            st.write(f"**Requester:** {selected_request['requester_name']}")
+            st.write(f"**Staff ID:** {selected_request['requester_staff_id']}")
+            st.write(f"**Leave Type:** {selected_request['leave_type']}")
+            st.write(f"**Dates:** {selected_request['start_date']} to {selected_request['end_date']} ({selected_request.get('duration_days', 'N/A')} days)") # Use .get with default
+            st.write(f"**Reason:** {selected_request['reason']}")
+            if selected_request['document_path'] and os.path.exists(selected_request['document_path']):
+                with open(selected_request['document_path'], "rb") as file:
+                    btn = st.download_button(
+                        label="Download Supporting Document",
+                        data=file,
+                        file_name=os.path.basename(selected_request['document_path']),
+                        mime="application/octet-stream"
+                    )
+            else:
+                st.info("No supporting document provided.")
 
-        if selected_beneficiary_name == "Other (Manually Enter Details)":
-            vendor_name = st.text_input("Vendor Name (as on invoice/account)", key="manual_vendor_name")
-            vendor_account_name = st.text_input("Vendor Account Name", key="manual_account_name")
-            vendor_account_no = st.text_input("Vendor Account Number", key="manual_account_no")
-            vendor_bank = st.text_input("Vendor Bank Name", key="manual_bank_name")
-        elif selected_beneficiary_name: # A pre-defined beneficiary was selected
-            vendor_details = st.session_state.beneficiaries.get(selected_beneficiary_name, {})
-            vendor_name = selected_beneficiary_name
-            vendor_account_name = vendor_details.get("Account Name", "")
-            vendor_account_no = vendor_details.get("Account No", "")
-            vendor_bank = vendor_details.get("Bank", "")
-            st.text_input("Vendor Account Name", value=vendor_account_name, disabled=True)
-            st.text_input("Vendor Account Number", value=vendor_account_no, disabled=True)
-            st.text_input("Vendor Bank Name", value=vendor_bank, disabled=True)
+            col_approve, col_reject = st.columns(2)
+            with col_approve:
+                if st.button("Approve Request"):
+                    selected_request['status'] = 'Approved'
+                    save_data(leave_requests, LEAVE_REQUESTS_FILE)
+                    st.success("Leave request approved!")
+                    st.rerun()
+            with col_reject:
+                if st.button("Reject Request"):
+                    selected_request['status'] = 'Rejected'
+                    save_data(leave_requests, LEAVE_REQUESTS_FILE)
+                    st.warning("Leave request rejected.")
+                    st.rerun()
+    else:
+        st.info("No pending leave requests to review.")
 
+# --- OPEX/CAPEX Management (Staff & Admin/Approvers) ---
+def request_opex_capex():
+    st.header("OPEX/CAPEX Requisition")
+    current_user_staff_id = st.session_state.current_user['profile']['staff_id']
+    current_user_name = st.session_state.current_user['profile']['name']
+    current_user_department = st.session_state.current_user['profile']['department']
+    opex_capex_requests = load_data(OPEX_CAPEX_REQUESTS_FILE)
+    users = load_data(USERS_FILE) # Needed to find approvers
 
-        uploaded_invoice = st.file_uploader("Upload Invoice/Quotation (PDF, JPG, PNG)", type=["pdf", "jpg", "png"], key="opex_capex_doc_uploader")
+    st.subheader("Submit New Requisition")
+    with st.form("opex_capex_form"):
+        request_type = st.selectbox("Request Type", ["OPEX (Operational Expenditure)", "CAPEX (Capital Expenditure)"])
+        item_description = st.text_area("Item Description/Purpose")
+        expense_line = st.selectbox("Expense Line", list(EXPENSE_LINES_BUDGET.keys()))
+        material_cost = st.number_input("Material Cost (NGN)", min_value=0.0, format="%.2f")
+        labor_cost = st.number_input("Labor Cost (NGN)", min_value=0.0, format="%.2f")
+        justification = st.text_area("Justification")
+        vendor_name = st.text_input("Vendor Name")
+        vendor_account_name = st.text_input("Vendor Account Name")
+        vendor_account_no = st.text_input("Vendor Account Number")
+        vendor_bank = st.text_input("Vendor Bank")
+        supporting_document = st.file_uploader("Upload Supporting Document (e.g., Invoice, Quote)", type=["pdf", "jpg", "png"])
 
         submitted = st.form_submit_button("Submit Requisition")
 
         if submitted:
-            if not item_description or total_amount <= 0 or not justification or not vendor_name or not vendor_account_name or not vendor_account_no or not vendor_bank:
-                st.error("Please fill in all required fields and ensure Total Amount is greater than zero.")
-            elif selected_expense_line == "Select an Expense Line":
-                st.error("Please select an Expense Line.")
-            else:
-                new_request_id = f"REQ-{len(st.session_state.opex_capex_requests) + 1:04d}"
-                file_path = save_uploaded_file(uploaded_invoice, "opex_capex_documents") if uploaded_invoice else None
+            total_amount = material_cost + labor_cost
+            wht_percentage = 0.05 # Example Withholding Tax
+            wht_amount = total_amount * wht_percentage
+            net_amount_payable = total_amount - wht_amount
+            budgeted_amount = EXPENSE_LINES_BUDGET.get(expense_line, 0.0)
+            budget_balance = budgeted_amount - total_amount # Simplified for now
 
-                # Initialize approval statuses for each stage to "Pending"
-                approval_statuses = {f"status_{stage['role_name'].lower().replace(' ', '_')}": "Pending" for stage in APPROVAL_CHAIN}
+            # Determine the first approver based on the chain
+            first_approver_role = APPROVAL_CHAIN[0]['role_name']
+            first_approver_dept = APPROVAL_CHAIN[0]['department']
+            first_approver_grade = APPROVAL_CHAIN[0]['grade_level']
+            first_approver_name = get_approver_name_by_criteria(users, first_approver_dept, first_approver_grade)
 
-                new_request = {
-                    "request_id": new_request_id,
-                    "requester_staff_id": requester_staff_id,
-                    "requester_name": requester_name,
-                    "requester_department": requester_department,
-                    "request_type": request_type,
-                    "item_description": item_description,
-                    "expense_line": selected_expense_line, # NEW
-                    "budgeted_amount": budgeted_amount, # NEW
-                    "material_cost": material_cost, # NEW
-                    "labor_cost": labor_cost, # NEW
-                    "total_amount": total_amount,
-                    "wht_percentage": selected_wht_label, # NEW
-                    "wht_amount": wht_amount, # NEW
-                    "net_amount_payable": net_amount_payable, # NEW
-                    "budget_balance": budget_balance, # NEW
-                    "justification": justification,
-                    "vendor_name": vendor_name,
-                    "vendor_account_name": vendor_account_name,
-                    "vendor_account_no": vendor_account_no,
-                    "vendor_bank": vendor_bank,
-                    "document_path": file_path,
-                    "submission_date": datetime.now().isoformat(),
-                    "current_approval_stage": 0, # Index of the current approver in APPROVAL_CHAIN
-                    "approval_history": [], # To log who approved/rejected when
-                    "final_status": "Pending", # Overall status of the request
-                    **approval_statuses # Unpack initial pending statuses for each stage
-                }
-                st.session_state.opex_capex_requests.append(new_request)
-                save_data(st.session_state.opex_capex_requests, OPEX_CAPEX_REQUESTS_FILE)
-                st.success("OPEX/CAPEX requisition submitted successfully! It is now pending approval.")
-                st.rerun()
+            if not first_approver_name:
+                st.error(f"Error: Could not find an approver for the first stage ({first_approver_role}). Please contact HR.")
+                return
 
-# --- View My OPEX/CAPEX Requisitions ---
-def view_my_opex_capex_requests():
-    st.title("📄 My OPEX/CAPEX Requests")
+            doc_path = save_uploaded_file(supporting_document, "opex_capex_documents")
 
-    current_user_username = st.session_state.current_user['username']
-    my_requests = [
-        req for req in st.session_state.opex_capex_requests
-        if req.get('requester_username') == current_user_username
-    ]
+            new_request = {
+                "request_id": str(uuid.uuid4()),
+                "requester_staff_id": current_user_staff_id,
+                "requester_name": current_user_name,
+                "requester_department": current_user_department,
+                "request_type": request_type,
+                "item_description": item_description,
+                "expense_line": expense_line,
+                "budgeted_amount": budgeted_amount,
+                "material_cost": material_cost,
+                "labor_cost": labor_cost,
+                "total_amount": total_amount,
+                "wht_percentage": wht_percentage,
+                "wht_amount": wht_amount,
+                "net_amount_payable": net_amount_payable,
+                "budget_balance": budget_balance,
+                "justification": justification,
+                "vendor_name": vendor_name,
+                "vendor_account_name": vendor_account_name,
+                "vendor_account_no": vendor_account_no,
+                "vendor_bank": vendor_bank,
+                "document_path": doc_path,
+                "submission_date": datetime.now().isoformat(),
+                "current_approver_role": first_approver_role, # Role of the next person to approve
+                "current_approval_stage": 0, # Index in APPROVAL_CHAIN
+                "final_status": "Pending",
+                "approval_history": []
+            }
+            opex_capex_requests.append(new_request)
+            save_data(opex_capex_requests, OPEX_CAPEX_REQUESTS_FILE)
+            st.success(f"OPEX/CAPEX request submitted successfully! Awaiting approval from {first_approver_name} ({first_approver_role}).")
+            st.rerun()
 
-    if not my_requests:
-        st.info("You have not submitted any OPEX/CAPEX requests yet.")
-        return
+    st.subheader("Your Requisition History")
+    user_requests = [req for req in opex_capex_requests if req['requester_staff_id'] == current_user_staff_id]
+    if user_requests:
+        df_user_requests = pd.DataFrame(user_requests)
+        st.dataframe(df_user_requests[['request_id', 'request_type', 'item_description', 'total_amount', 'final_status', 'current_approver_role', 'submission_date']])
 
-    # Prepare data for DataFrame, including deriving 'current_approver_role'
-    requests_for_df = []
-    for req in my_requests:
-        # Get the current approval stage index
-        current_stage_index = req.get('current_approval_stage', 0)
-        
-        # Determine the current approver's role name
-        current_approver_role_name = "N/A"
-        if req.get('final_status') == 'Pending' and current_stage_index < len(APPROVAL_CHAIN):
-            current_approver_role_name = APPROVAL_CHAIN[current_stage_index]['role_name']
-        elif req.get('final_status') in ["Approved", "Rejected"]:
-            current_approver_role_name = "Finalized" # Or a more appropriate status
-
-        requests_for_df.append({
-            'request_id': req.get('request_id'),
-            'submission_date': req.get('submission_date'),
-            'request_type': req.get('request_type'),
-            'item_description': req.get('item_description'),
-            'total_amount': req.get('total_amount'),
-            'final_status': req.get('final_status', 'Pending'),
-            'current_approver_role': current_approver_role_name, # Derived column
-            'document_path': req.get('document_path') # Include document path for download
-        })
-
-    df_my_requests = pd.DataFrame(requests_for_df)
-
-    # Convert submission_date to datetime objects for proper sorting and display
-    if 'submission_date' in df_my_requests.columns:
-        df_my_requests['submission_date'] = pd.to_datetime(df_my_requests['submission_date'], errors='coerce').dt.date
-
-    # Convert relevant numeric columns to string for display to avoid ArrowInvalid
-    numeric_cols_to_string = [
-        'total_amount'
-    ]
-    for col in numeric_cols_to_string:
-        if col in df_my_requests.columns:
-            df_my_requests[col] = df_my_requests[col].apply(lambda x: f"NGN {x:,.2f}" if pd.notna(x) else 'N/A')
-
-
-    st.dataframe(df_my_requests[[
-        'request_id', 'submission_date', 'request_type', 'item_description',
-        'total_amount', 'final_status', 'current_approver_role'
-    ]], use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-    st.subheader("View/Download Request Details")
-    
-    # Ensure options for selectbox are only valid string request IDs
-    selected_request_id = st.selectbox(
-        "Select a request to view details or download PDF:",
-        options=[""] + [req['request_id'] for req in requests_for_df if req.get('request_id')],
-        key="select_my_opex_capex_request"
-    )
-
-    if selected_request_id:
-        selected_request = next((req for req in my_requests if req.get('request_id') == selected_request_id), None)
-
-        if selected_request:
+        # Option to view details and PDF
+        selected_request_id = st.selectbox("View details of a request:", [""] + [req['request_id'] for req in user_requests])
+        if selected_request_id:
+            selected_request = next(req for req in user_requests if req['request_id'] == selected_request_id)
+            # Removed st.json(selected_request) as per user's feedback for scattering
+            st.subheader(f"Details for Request ID: {selected_request_id}")
+            # Manually display key details for better formatting
+            st.write(f"**Requester Name:** {selected_request.get('requester_name')}")
+            st.write(f"**Request Type:** {selected_request.get('request_type')}")
+            st.write(f"**Item Description:** {selected_request.get('item_description')}")
+            st.write(f"**Total Amount:** NGN {selected_request.get('total_amount', 0.0):,.2f}")
+            st.write(f"**Net Amount Payable:** NGN {selected_request.get('net_amount_payable', 0.0):,.2f}")
+            st.write(f"**Justification:** {selected_request.get('justification')}")
+            st.write(f"**Vendor:** {selected_request.get('vendor_name')} (Account: {selected_request.get('vendor_account_no')}, Bank: {selected_request.get('vendor_bank')})")
+            
             st.markdown("---")
-            st.subheader(f"Details for Request: {selected_request_id}")
-            
-            # Display all request details in a readable format
-            st.write(f"**Request ID:** {selected_request.get('request_id', 'N/A')}")
-            st.write(f"**Submission Date:** {selected_request.get('submission_date', 'N/A')}")
-            st.write(f"**Request Type:** {selected_request.get('request_type', 'N/A')}")
-            st.write(f"**Item Description:** {selected_request.get('item_description', 'N/A')}")
-            st.write(f"**Expense Line:** {selected_request.get('expense_line', 'N/A')}")
-            st.write(f"**Budgeted Amount:** NGN {selected_request.get('budgeted_amount', 0):,.2f}")
-            st.write(f"**Material Cost:** NGN {selected_request.get('material_cost', 0):,.2f}")
-            st.write(f"**Labor Cost:** NGN {selected_request.get('labor_cost', 0):,.2f}")
-            st.write(f"**Total Amount:** NGN {selected_request.get('total_amount', 0):,.2f}")
-            st.write(f"**WHT Percentage:** {selected_request.get('wht_percentage', 0)}%")
-            st.write(f"**WHT Amount:** NGN {selected_request.get('wht_amount', 0):,.2f}")
-            st.write(f"**Net Amount Payable:** NGN {selected_request.get('net_amount_payable', 0):,.2f}")
-            st.write(f"**Budget Balance (After Request):** NGN {selected_request.get('budget_balance', 0):,.2f}")
-            st.write(f"**Justification:** {selected_request.get('justification', 'N/A')}")
-            st.write(f"**Vendor Name:** {selected_request.get('vendor_name', 'N/A')}")
-            st.write(f"**Vendor Account Name:** {selected_request.get('vendor_account_name', 'N/A')}")
-            st.write(f"**Vendor Account No:** {selected_request.get('vendor_account_no', 'N/A')}")
-            st.write(f"**Vendor Bank:** {selected_request.get('vendor_bank', 'N/A')}")
-            st.write(f"**Current Status:** **{selected_request.get('final_status', 'Pending')}**")
-            
-            # Display current approver role if not finalized
-            if selected_request.get('final_status') == 'Pending':
-                current_stage_idx = selected_request.get('current_approval_stage', 0)
-                if current_stage_idx < len(APPROVAL_CHAIN):
-                    current_approver_info = APPROVAL_CHAIN[current_stage_idx]
-                    st.write(f"**Next Approver:** {current_approver_info['role_name']} ({current_approver_info['department']} - {current_approver_info['grade_level']})")
-                else:
-                    st.write("**Next Approver:** Awaiting final review/processing (beyond defined chain)")
-            else:
-                st.write(f"**Approval Process:** {selected_request.get('final_status')}")
-
-            # Display approval history
             st.subheader("Approval History")
             if selected_request.get('approval_history'):
                 for entry in selected_request['approval_history']:
-                    st.write(f"- **{entry.get('approver_role')}** by **{entry.get('approver_name')}** on **{entry.get('date')}**: **{entry.get('status')}**. Comment: {entry.get('comment', 'No comment.')}")
+                    st.write(f"- **{entry.get('approver_role')}** by {entry.get('approver_name')} on {datetime.fromisoformat(entry['date']).strftime('%Y-%m-%d %H:%M:%S') if entry.get('date') else 'N/A'}: **{entry.get('status')}**. Comment: {entry.get('comment', 'No comment.')}")
             else:
-                st.info("No approval history for this request yet.")
+                st.info("No approval history for this request.")
 
-            # Download PDF button
-            if selected_request.get('pdf_path') and os.path.exists(selected_request['pdf_path']):
-                with open(selected_request['pdf_path'], "rb") as pdf_file:
+            pdf_path = generate_opex_capex_pdf(selected_request)
+            if pdf_path:
+                with open(pdf_path, "rb") as pdf_file:
                     st.download_button(
-                        label="Download OPEX/CAPEX Request PDF",
-                        data=pdf_file.read(),
-                        file_name=os.path.basename(selected_request['pdf_path']),
-                        mime="application/pdf",
-                        key=f"download_opex_capex_pdf_{selected_request_id}"
+                        label="Download Requisition PDF",
+                        data=pdf_file,
+                        file_name=os.path.basename(pdf_path),
+                        mime="application/pdf"
                     )
-            else:
-                st.info("PDF not yet generated or found for this request.")
-
-            # Display attached document if any
-            if selected_request.get('document_path') and os.path.exists(selected_request['document_path']):
-                st.download_button(
-                    label=f"Download Attached Document: {os.path.basename(selected_request['document_path'])}",
-                    data=open(selected_request['document_path'], "rb").read(),
-                    file_name=os.path.basename(selected_request['document_path']),
-                    mime="application/octet-stream",
-                    key=f"download_doc_{selected_request_id}"
-                )
-            else:
-                st.info("No attached document for this request.")
-        else:
-            st.warning("Selected request not found.")
-
-# --- Performance Goal Setting ---
-def performance_goal_setting():
-    st.title("📈 Performance Goal Setting")
-    if st.session_state.logged_in and st.session_state.current_user:
-        current_user_profile = st.session_state.current_user.get('profile', {})
-        employee_name = current_user_profile.get('name', st.session_state.current_user['username'])
-        employee_staff_id = current_user_profile.get('staff_id', 'N/A')
-
-        st.write(f"**Setting goals for:** {employee_name} (Staff ID: {employee_staff_id})")
-
-        with st.form("goal_setting_form", clear_on_submit=True):
-            goal_period = st.selectbox("Goal Period", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024", "Annual 2024"])
-            goal_category = st.selectbox("Goal Category", ["Individual Performance", "Team Contribution", "Professional Development", "Innovation"])
-            goal_description = st.text_area("Goal Description (SMART: Specific, Measurable, Achievable, Relevant, Time-bound)", max_chars=1000)
-            target_metric = st.text_input("Target Metric (e.g., 'Increase sales by 10%', 'Complete 2 certifications')")
-            due_date = st.date_input("Due Date", min_value=date.today())
-            submit_button = st.form_submit_button("Set Goal")
-
-            if submit_button:
-                if not goal_description or not target_metric:
-                    st.error("Please fill in all required goal details.")
-                else:
-                    goal_id = f"GOAL-{len(st.session_state.performance_goals) + 1:04d}"
-                    new_goal = {
-                        "goal_id": goal_id,
-                        "staff_id": employee_staff_id,
-                        "employee_name": employee_name,
-                        "goal_period": goal_period,
-                        "goal_category": goal_category,
-                        "goal_description": goal_description,
-                        "target_metric": target_metric,
-                        "due_date": due_date.isoformat(),
-                        "set_date": datetime.now().isoformat(),
-                        "status": "Active", # Active, Completed, Overdue, Cancelled
-                        "achieved_progress": "",
-                        "manager_comment": ""
-                    }
-                    st.session_state.performance_goals.append(new_goal)
-                    save_data(st.session_state.performance_goals, PERFORMANCE_GOALS_FILE)
-                    st.success(f"Performance goal '{goal_id}' set successfully!")
-                    st.rerun()
     else:
-        st.warning("Please log in to set performance goals.")
+        st.info("You have not submitted any OPEX/CAPEX requisitions yet.")
 
-# --- Performance Goal Setting ---
-def performance_goal_setting():
-    st.title("📈 Performance Goal Setting")
+def admin_manage_opex_capex_approvals():
+    st.header("Manage OPEX/CAPEX Approvals")
     current_user_profile = st.session_state.current_user.get('profile', {})
-    staff_id = current_user_profile.get('staff_id', 'N/A')
-    staff_name = current_user_profile.get('name', 'N/A')
+    current_user_department = current_user_profile.get('department')
+    current_user_grade = current_user_profile.get('grade_level')
+    current_user_name = current_user_profile.get('name')
+    opex_capex_requests = load_data(OPEX_CAPEX_REQUESTS_FILE)
+    users = load_data(USERS_FILE)
 
-    st.write(f"Setting goals for: **{staff_name}** (Staff ID: **{staff_id}**)")
+    # Determine the current user's role in the approval chain
+    current_approver_role_in_chain = None
+    for role_info in APPROVAL_CHAIN:
+        if (role_info['department'] == current_user_department and
+                role_info['grade_level'] == current_user_grade):
+            current_approver_role_in_chain = role_info['role_name']
+            break
 
-    with st.form("goal_setting_form", clear_on_submit=True):
-        goal_title = st.text_input("Goal Title", help="e.g., Improve customer satisfaction, Reduce operational costs")
-        goal_description = st.text_area("Goal Description", help="Provide a detailed explanation of the goal.")
-        target_metric = st.text_input("Target Metric", help="e.g., 90% customer satisfaction rating, 15% cost reduction")
-        due_date = st.date_input("Due Date", date.today() + timedelta(days=90))
+    if not current_approver_role_in_chain:
+        st.warning("You are not configured as an approver in the OPEX/CAPEX approval chain.")
+        return
+
+    st.subheader(f"Requests Pending Your Approval ({current_approver_role_in_chain})")
+    pending_for_this_approver = [
+        req for req in opex_capex_requests
+        if req.get('current_approver_role') == current_approver_role_in_chain and req.get('final_status') == 'Pending'
+    ]
+
+    if not pending_for_this_approver:
+        st.info("No OPEX/CAPEX requests currently pending your approval.")
+        return
+
+    df_pending = pd.DataFrame(pending_for_this_approver)
+    st.dataframe(df_pending[['request_id', 'requester_name', 'request_type', 'item_description', 'total_amount', 'submission_date']])
+
+    request_to_review_id = st.selectbox(
+        "Select Request ID to Review:",
+        [""] + [req['request_id'] for req in pending_for_this_approver]
+    )
+
+    if request_to_review_id:
+        selected_request = next(req for req in pending_for_this_approver if req['request_id'] == request_to_review_id)
+        st.subheader(f"Reviewing Request: {selected_request['request_id']}")
+
+        # Display full request details in a structured way
+        st.write(f"**Requester Name:** {selected_request.get('requester_name')}")
+        st.write(f"**Requester Staff ID:** {selected_request.get('requester_staff_id')}")
+        st.write(f"**Requester Department:** {selected_request.get('requester_department')}")
+        st.write(f"**Request Type:** {selected_request.get('request_type')}")
+        st.write(f"**Item Description/Purpose:** {selected_request.get('item_description')}")
+        st.write(f"**Expense Line:** {selected_request.get('expense_line')}")
+        st.write(f"**Budgeted Amount:** NGN {selected_request.get('budgeted_amount', 0.0):,.2f}")
+        st.write(f"**Material Cost:** NGN {selected_request.get('material_cost', 0.0):,.2f}")
+        st.write(f"**Labor Cost:** NGN {selected_request.get('labor_cost', 0.0):,.2f}")
+        st.write(f"**Total Amount:** NGN {selected_request.get('total_amount', 0.0):,.2f}")
+        st.write(f"**WHT Percentage:** {selected_request.get('wht_percentage', 0.0)*100:.2f}%")
+        st.write(f"**WHT Amount:** NGN {selected_request.get('wht_amount', 0.0):,.2f}")
+        st.write(f"**Net Amount Payable:** NGN {selected_request.get('net_amount_payable', 0.0):,.2f}")
+        st.write(f"**Budget Balance:** NGN {selected_request.get('budget_balance', 0.0):,.2f}")
+        st.write(f"**Justification:** {selected_request.get('justification')}")
+        st.write(f"**Vendor Name:** {selected_request.get('vendor_name')}")
+        st.write(f"**Vendor Account Name:** {selected_request.get('vendor_account_name')}")
+        st.write(f"**Vendor Account Number:** {selected_request.get('vendor_account_no')}")
+        st.write(f"**Vendor Bank:** {selected_request.get('vendor_bank')}")
+        st.write(f"**Submission Date:** {datetime.fromisoformat(selected_request['submission_date']).strftime('%Y-%m-%d %H:%M:%S') if selected_request.get('submission_date') else 'N/A'}")
+        st.write(f"**Final Status:** {selected_request.get('final_status')}")
+        st.write(f"**Current Approver Role:** {selected_request.get('current_approver_role')}")
         
+        st.markdown("---")
+        st.subheader("Approval History")
+        if selected_request.get('approval_history'):
+            for entry in selected_request['approval_history']:
+                st.write(f"- **{entry.get('approver_role')}** by {entry.get('approver_name')} on {datetime.fromisoformat(entry['date']).strftime('%Y-%m-%d %H:%M:%S') if entry.get('date') else 'N/A'}: **{entry.get('status')}**. Comment: {entry.get('comment', 'No comment.')}")
+        else:
+            st.info("No approval history for this request.")
+
+
+        # Download supporting document
+        if selected_request['document_path'] and os.path.exists(selected_request['document_path']):
+            with open(selected_request['document_path'], "rb") as file:
+                btn = st.download_button(
+                    label="Download Supporting Document",
+                    data=file,
+                    file_name=os.path.basename(selected_request['document_path']),
+                    mime="application/octet-stream"
+                )
+        else:
+            st.info("No supporting document provided for this request.")
+
+        comment = st.text_area("Add a comment for this approval/rejection:")
+
+        col_approve, col_reject = st.columns(2)
+        with col_approve:
+            if st.button("Approve"):
+                selected_request['approval_history'].append({
+                    "approver_role": current_approver_role_in_chain,
+                    "approver_name": current_user_name,
+                    "date": datetime.now().isoformat(),
+                    "status": "Approved",
+                    "comment": comment
+                })
+                # Move to next stage or finalize
+                next_stage_index = selected_request['current_approval_stage'] + 1
+                if next_stage_index < len(APPROVAL_CHAIN):
+                    next_approver_info = APPROVAL_CHAIN[next_stage_index]
+                    selected_request['current_approver_role'] = next_approver_info['role_name']
+                    selected_request['current_approval_stage'] = next_stage_index
+                    st.success(f"Request {request_to_review_id} approved. Moving to {next_approver_info['role_name']} for review.")
+                else:
+                    selected_request['final_status'] = 'Approved'
+                    selected_request['current_approver_role'] = 'Final Approval'
+                    st.success(f"Request {request_to_review_id} fully approved!")
+
+                save_data(opex_capex_requests, OPEX_CAPEX_REQUESTS_FILE)
+                st.rerun()
+
+        with col_reject:
+            if st.button("Reject"):
+                selected_request['approval_history'].append({
+                    "approver_role": current_approver_role_in_chain,
+                    "approver_name": current_user_name,
+                    "date": datetime.now().isoformat(),
+                    "status": "Rejected",
+                    "comment": comment
+                })
+                selected_request['final_status'] = 'Rejected'
+                selected_request['current_approver_role'] = 'Rejected'
+                save_data(opex_capex_requests, OPEX_CAPEX_REQUESTS_FILE)
+                st.warning(f"Request {request_to_review_id} rejected.")
+                st.rerun()
+
+    st.subheader("All OPEX/CAPEX Requests")
+    if opex_capex_requests:
+        df_all_requests = pd.DataFrame(opex_capex_requests)
+        st.dataframe(df_all_requests)
+    else:
+        st.info("No OPEX/CAPEX requests have been submitted yet.")
+
+# --- Performance Goals (Staff & Admin) ---
+def manage_performance_goals():
+    st.header("Manage Performance Goals")
+    current_user_staff_id = st.session_state.current_user['profile']['staff_id']
+    performance_goals = load_data(PERFORMANCE_GOALS_FILE)
+
+    st.subheader("Set New Goal")
+    with st.form("set_goal_form"):
+        goal_description = st.text_area("Goal Description")
+        collaborating_department = st.text_input("Collaborating Department (if any)")
+        # Added "Pending Review" to status options for consistency
+        status = st.selectbox("Current Status", ["Not Started", "In Progress", "On Hold", "Complete", "Pending Review"])
+        employee_remark_update = st.text_area("Employee Remark/Update")
+        start_date_input = st.date_input("Start Date", value=datetime.now().date())
+        end_date_input = st.date_input("End Date", value=datetime.now().date() + timedelta(days=90))
+        weighting_percent = st.number_input("Weighting (%)", min_value=0, max_value=100, value=0)
+
         submitted = st.form_submit_button("Set Goal")
 
         if submitted:
-            if not goal_title or not goal_description or not target_metric:
-                st.error("Please fill in all required fields.")
+            if start_date_input > end_date_input:
+                st.error("End Date cannot be before Start Date.")
             else:
+                duration = (end_date_input - start_date_input).days
                 new_goal = {
-                    "goal_id": f"GOAL-{len(st.session_state.performance_goals) + 1:04d}",
-                    "staff_id": staff_id,
-                    "staff_name": staff_name,
-                    "goal_title": goal_title,
+                    "goal_id": str(uuid.uuid4()),
+                    "staff_id": current_user_staff_id,
                     "goal_description": goal_description,
-                    "target_metric": target_metric,
-                    "due_date": due_date.isoformat(),
-                    "status": "Active", # Active, Completed, On Hold, Canceled
+                    "collaborating_department": collaborating_department,
+                    "status": status,
+                    "employee_remark_update": employee_remark_update,
+                    "start_date": start_date_input.isoformat(),
+                    "end_date": end_date_input.isoformat(),
+                    "duration": f"{duration} days",
+                    "weighting_percent": weighting_percent,
                     "set_date": datetime.now().isoformat(),
-                    "progress_notes": []
+                    "progress_updates": [],
+                    "self_rating": None, # Initialize for appraisal
+                    "line_manager_rating": None # Initialize for appraisal
                 }
-                st.session_state.performance_goals.append(new_goal)
-                save_data(st.session_state.performance_goals, PERFORMANCE_GOALS_FILE)
+                performance_goals.append(new_goal)
+                save_data(performance_goals, PERFORMANCE_GOALS_FILE)
                 st.success("Performance goal set successfully!")
                 st.rerun()
 
-# --- View My Goals ---
-def view_my_goals():
-    st.title("👀 My Performance Goals")
-    current_user_staff_id = st.session_state.current_user.get('profile', {}).get('staff_id')
-
-    user_goals = [
-        goal for goal in st.session_state.performance_goals
-        if goal.get('staff_id') == current_user_staff_id
-    ]
-
+    st.subheader("Your Current Goals")
+    user_goals = [goal for goal in performance_goals if goal['staff_id'] == current_user_staff_id]
     if user_goals:
+        # Create a DataFrame for display
         df_goals = pd.DataFrame(user_goals)
-        df_goals_display = df_goals[['goal_id', 'set_date', 'goal_title', 'target_metric', 'due_date', 'status']]
-        st.dataframe(df_goals_display, use_container_width=True, hide_index=True)
+        # Select and reorder columns as per user's request
+        display_columns = [
+            "goal_description", "collaborating_department", "status",
+            "employee_remark_update", "start_date", "end_date", "duration", "weighting_percent"
+        ]
+        # Add S/N
+        df_goals_display = df_goals[display_columns].copy()
+        df_goals_display.insert(0, 'S/N', range(1, 1 + len(df_goals_display)))
+        df_goals_display.columns = [
+            "S/N", "Goals", "Collaborating Department", "Status",
+            "Employee Remark/Update", "Start Date", "End Date", "Duration", "Weighting (%)"
+        ]
+        st.dataframe(df_goals_display, use_container_width=True)
 
-        st.markdown("---")
-        st.subheader("Goal Details and Progress Update")
-        selected_goal_id = st.selectbox("Select a Goal to View/Update", [goal['goal_id'] for goal in user_goals])
+        st.subheader("Update Existing Goal")
+        goal_options = {goal['goal_description']: goal['goal_id'] for goal in user_goals}
+        selected_goal_desc = st.selectbox("Select Goal to Update:", [""] + list(goal_options.keys()))
 
-        if selected_goal_id:
-            selected_goal_index = next((i for i, goal in enumerate(user_goals) if goal['goal_id'] == selected_goal_id), None)
-            if selected_goal_index is not None:
-                selected_goal = user_goals[selected_goal_index]
-                
-                st.write(f"**Goal Title:** {selected_goal.get('goal_title')}")
-                st.write(f"**Description:** {selected_goal.get('goal_description')}")
-                st.write(f"**Target Metric:** {selected_goal.get('target_metric')}")
-                st.write(f"**Due Date:** {selected_goal.get('due_date')}")
-                st.write(f"**Status:** {selected_goal.get('status')}")
+        if selected_goal_desc:
+            selected_goal_id = goal_options[selected_goal_desc]
+            selected_goal = next(goal for goal in performance_goals if goal['goal_id'] == selected_goal_id)
+            goal_index = performance_goals.index(selected_goal)
 
-                st.markdown("##### Progress Notes:")
-                if selected_goal.get('progress_notes'):
-                    for note_entry in selected_goal['progress_notes']:
-                        st.write(f"- {note_entry.get('date')}: {note_entry.get('note')}")
-                else:
-                    st.info("No progress notes yet.")
+            with st.form("update_goal_form"):
+                updated_goal_description = st.text_area("Goal Description", value=selected_goal['goal_description'])
+                updated_collaborating_department = st.text_input("Collaborating Department", value=selected_goal['collaborating_department'])
+                # Added "Pending Review" to status options for consistency
+                updated_status = st.selectbox("Current Status", ["Not Started", "In Progress", "On Hold", "Complete", "Pending Review"], index=["Not Started", "In Progress", "On Hold", "Complete", "Pending Review"].index(selected_goal['status']))
+                updated_employee_remark_update = st.text_area("Employee Remark/Update", value=selected_goal['employee_remark_update'])
+                updated_start_date = st.date_input("Start Date", value=date.fromisoformat(selected_goal['start_date']))
+                updated_end_date = st.date_input("End Date", value=date.fromisoformat(selected_goal['end_date']))
+                updated_weighting_percent = st.number_input("Weighting (%)", min_value=0, max_value=100, value=selected_goal['weighting_percent'])
 
-                st.markdown("---")
-                st.subheader("Add Progress Note")
-                new_note = st.text_area("New Progress Note", key=f"progress_note_{selected_goal_id}")
-                
-                # Use a unique key for the status selectbox
-                new_status = st.selectbox(
-                    "Update Status", 
-                    ["Active", "Completed", "On Hold", "Canceled"], 
-                    index=["Active", "Completed", "On Hold", "Canceled"].index(selected_goal.get('status')),
-                    key=f"status_update_{selected_goal_id}"
-                )
+                col_update, col_delete = st.columns(2)
+                with col_update:
+                    update_submitted = st.form_submit_button("Update Goal")
+                with col_delete:
+                    delete_submitted = st.form_submit_button("Delete Goal")
 
-                if st.button("Update Goal Progress", key=f"update_goal_btn_{selected_goal_id}"):
-                    if new_note:
-                        selected_goal['progress_notes'].append({
-                            "date": datetime.now().isoformat(),
-                            "note": new_note
-                        })
-                    selected_goal['status'] = new_status
-                    
-                    # Update the original list in session state
-                    for i, goal in enumerate(st.session_state.performance_goals):
-                        if goal['goal_id'] == selected_goal_id:
-                            st.session_state.performance_goals[i] = selected_goal
-                            break
-                    save_data(st.session_state.performance_goals, PERFORMANCE_GOALS_FILE)
-                    st.success("Goal updated successfully!")
+                if update_submitted:
+                    if updated_start_date > updated_end_date:
+                        st.error("End Date cannot be before Start Date.")
+                    else:
+                        duration = (updated_end_date - updated_start_date).days
+                        performance_goals[goal_index]['goal_description'] = updated_goal_description
+                        performance_goals[goal_index]['collaborating_department'] = updated_collaborating_department
+                        performance_goals[goal_index]['status'] = updated_status
+                        performance_goals[goal_index]['employee_remark_update'] = updated_employee_remark_update
+                        performance_goals[goal_index]['start_date'] = updated_start_date.isoformat()
+                        performance_goals[goal_index]['end_date'] = updated_end_date.isoformat()
+                        performance_goals[goal_index]['duration'] = f"{duration} days"
+                        performance_goals[goal_index]['weighting_percent'] = updated_weighting_percent
+                        save_data(performance_goals, PERFORMANCE_GOALS_FILE)
+                        st.success("Goal updated successfully!")
+                        st.rerun()
+
+                if delete_submitted:
+                    del performance_goals[goal_index]
+                    save_data(performance_goals, PERFORMANCE_GOALS_FILE)
+                    st.success("Goal deleted successfully!")
                     st.rerun()
     else:
         st.info("You have not set any performance goals yet.")
 
-# --- Self-Appraisal Form ---
-def self_appraisal_form():
-    st.title("✍️ Self-Appraisal")
-    current_user_profile = st.session_state.current_user.get('profile', {})
-    staff_id = current_user_profile.get('staff_id', 'N/A')
-    staff_name = current_user_profile.get('name', 'N/A')
+def admin_view_performance_goals():
+    st.header("View All Performance Goals (Admin/HR)")
+    performance_goals = load_data(PERFORMANCE_GOALS_FILE)
+    users = load_data(USERS_FILE)
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in users}
 
-    st.write(f"Appraisal for: **{staff_name}** (Staff ID: **{staff_id}**)")
-
-    # Fetch user's goals for reference
-    user_goals = [
-        goal for goal in st.session_state.performance_goals
-        if goal.get('staff_id') == staff_id
-    ]
-
-    if not user_goals:
-        st.warning("You currently have no performance goals set. Please set some goals before completing an appraisal.")
+    if not performance_goals:
+        st.info("No performance goals have been set yet.")
         return
 
-    st.markdown("---")
-    st.subheader("Appraisal Period")
-    appraisal_period_start = st.date_input("Appraisal Period Start Date", value=date.today().replace(month=1, day=1), key="appraisal_start_date")
-    appraisal_period_end = st.date_input("Appraisal Period End Date", value=date.today(), key="appraisal_end_date")
+    df_goals = pd.DataFrame(performance_goals)
+    df_goals['Employee Name'] = df_goals['staff_id'].map(staff_id_to_name)
 
-    st.markdown("---")
-    st.subheader("Goal-Based Appraisal")
-    st.info("Please review your performance against your set goals.")
+    st.subheader("Performance Goal Statistics")
+    if not df_goals.empty:
+        # Pie chart for Goal Status Distribution
+        status_counts = df_goals['status'].value_counts().reset_index()
+        status_counts.columns = ['Status', 'Count']
+        fig_status = px.pie(status_counts, values='Count', names='Status',
+                            title='Overall Goal Status Distribution',
+                            hole=.3)
+        st.plotly_chart(fig_status, use_container_width=True)
 
-    appraisal_goals = []
-    for goal in user_goals:
-        st.markdown(f"**Goal Title:** {goal.get('goal_title')}")
-        st.write(f"**Description:** {goal.get('goal_description')}")
-        st.write(f"**Target Metric:** {goal.get('target_metric')}")
-        st.write(f"**Due Date:** {goal.get('due_date')}")
-        st.write(f"**Current Status:** {goal.get('status')}")
-        
-        achieved = st.radio(f"Achieved for '{goal.get('goal_title')}'?", ["Fully Achieved", "Partially Achieved", "Not Achieved"], key=f"achieved_{goal.get('goal_id')}")
-        self_assessment = st.text_area(f"Self-Assessment for '{goal.get('goal_title')}'", key=f"assessment_{goal.get('goal_id')}", 
-                                       help="Describe your contributions and outcomes related to this goal.")
-        
-        appraisal_goals.append({
-            "goal_id": goal.get('goal_id'),
-            "goal_title": goal.get('goal_title'),
-            "achieved_status": achieved,
-            "self_assessment": self_assessment
-        })
-        st.markdown("---")
-
-    st.subheader("Overall Self-Assessment")
-    overall_strengths = st.text_area("Key Strengths & Contributions during this period", help="What did you do well? Where did you make the most impact?")
-    overall_improvements = st.text_area("Areas for Development & Training Needs", help="What areas do you need to improve? What training would help?")
-    future_aspirations = st.text_area("Future Aspirations & Career Growth", help="What are your career goals? How can the company support you?")
-
-    with st.form("self_appraisal_submit_form", clear_on_submit=True):
-        submitted = st.form_submit_button("Submit Self-Appraisal")
-
-        if submitted:
-            if not overall_strengths or not overall_improvements or not future_aspirations:
-                st.error("Please fill in all overall self-assessment sections.")
-            else:
-                new_appraisal = {
-                    "appraisal_id": f"APP-{len(st.session_state.self_appraisals) + 1:04d}",
-                    "staff_id": staff_id,
-                    "staff_name": staff_name,
-                    "appraisal_date": datetime.now().isoformat(),
-                    "appraisal_period_start": appraisal_period_start.isoformat(),
-                    "appraisal_period_end": appraisal_period_end.isoformat(),
-                    "goal_appraisals": appraisal_goals,
-                    "overall_strengths": overall_strengths,
-                    "overall_improvements": overall_improvements,
-                    "future_aspirations": future_aspirations,
-                    "manager_feedback": "", # To be filled by manager
-                    "final_rating": "" # To be filled by manager
-                }
-                st.session_state.self_appraisals.append(new_appraisal)
-                save_data(st.session_state.self_appraisals, SELF_APPRAISALS_FILE)
-                st.success("Self-appraisal submitted successfully!")
-                st.rerun()
-
-# --- View My Appraisals ---
-def view_my_appraisals():
-    st.title("👀 My Self-Appraisals")
-    current_user_staff_id = st.session_state.current_user.get('profile', {}).get('staff_id')
-
-    user_appraisals = [
-        app for app in st.session_state.self_appraisals
-        if app.get('staff_id') == current_user_staff_id
-    ]
-
-    if user_appraisals:
-        df_appraisals = pd.DataFrame(user_appraisals)
-        df_appraisals_display = df_appraisals[['appraisal_id', 'appraisal_date', 'appraisal_period_start', 'appraisal_period_end', 'final_rating']]
-        st.dataframe(df_appraisals_display, use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-        st.subheader("Appraisal Details")
-        selected_appraisal_id = st.selectbox("Select an Appraisal to View Details", [app['appraisal_id'] for app in user_appraisals])
-        
-        if selected_appraisal_id:
-            selected_appraisal = next((app for app in user_appraisals if app['appraisal_id'] == selected_appraisal_id), None)
-            if selected_appraisal:
-                st.json(selected_appraisal) # Display full JSON for now for comprehensive view
-    else:
-        st.info("You have not submitted any self-appraisals yet.")
-
-# --- My Payslips ---
-def my_payslips():
-    st.title("💰 My Payslips")
-    current_user_staff_id = st.session_state.current_user.get('profile', {}).get('staff_id')
-
-    # Filter payroll data for the current user
-    user_payslips = [
-        payslip for payslip in st.session_state.payroll_data
-        if payslip.get('staff_id') == current_user_staff_id
-    ]
-
-    if user_payslips:
-        # Convert to DataFrame for display
-        df_payslips = pd.DataFrame(user_payslips)
-        # Select relevant columns for display
-        display_cols = ['pay_period', 'gross_pay', 'net_pay', 'deductions', 'bonus', 'pay_date']
-        
-        # Ensure all display columns exist in the dataframe, add missing ones as 'N/A'
-        for col in display_cols:
-            if col not in df_payslips.columns:
-                df_payslips[col] = 'N/A'
-
-        st.dataframe(df_payslips[display_cols], use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-        st.subheader("Payslip Details (Full)")
-        # Allow user to select a payslip for full details
-        selected_pay_period = st.selectbox(
-            "Select Pay Period to View Details",
-            [ps.get('pay_period') for ps in user_payslips]
+        # Bar chart for Average Self-Rating by Department
+        df_goals_with_dept = df_goals.copy()
+        # Fix: Safely get department, handling cases where get_user_profile might return None
+        df_goals_with_dept['Department'] = df_goals_with_dept['staff_id'].apply(
+            lambda x: get_user_profile(x).get('department', 'N/A') if get_user_profile(x) else 'N/A'
         )
-        if selected_pay_period:
-            selected_payslip = next(
-                (ps for ps in user_payslips if ps.get('pay_period') == selected_pay_period),
-                None
-            )
-            if selected_payslip:
-                st.json(selected_payslip)
-            else:
-                st.info("No details found for the selected payslip.")
-    else:
-        st.info("No payslips available for your Staff ID yet.")
-        st.info("Payslips are uploaded by HR/Admin.")
-
-
-# --- HR Policies ---
-def hr_policies():
-    st.title("📄 HR Policies")
-
-    if st.session_state.hr_policies:
-        selected_policy_name = st.selectbox("Select a Policy", list(st.session_state.hr_policies.keys()))
-        if selected_policy_name:
-            st.subheader(selected_policy_name)
-            st.write(st.session_state.hr_policies[selected_policy_name])
-    else:
-        st.info("No HR policies available yet. Please check back later.")
-        if st.session_state.current_user and st.session_state.current_user['role'] == 'admin':
-            st.info("As an Admin, you can add policies via 'Manage HR Policies' section.")
-
-# --- Admin Functions ---
-
-# Manage Users (Admin)
-def admin_manage_users():
-    st.title("👥 Admin: Manage Users")
-
-    # Display current users
-    st.subheader("Current Users")
-    if st.session_state.users:
-        df_users = pd.DataFrame(st.session_state.users)
-        df_users_display = df_users.apply(lambda x: x.astype(str) if x.name == 'password' else x) # Convert password hash to string for display
         
-        # Flatten profile dictionary for better display in dataframe
-        user_data_flat = []
-        for user in st.session_state.users:
-            flat_user = {k: v for k, v in user.items() if k != 'profile'}
-            flat_user.update(user.get('profile', {}))
-            user_data_flat.append(flat_user)
-        
-        df_users_display = pd.DataFrame(user_data_flat)
-        # Reorder columns to show important profile info first
-        if not df_users_display.empty:
-            cols = ['name', 'staff_id', 'username', 'role', 'department', 'grade_level', 'email_address', 'phone_number']
-            existing_cols = [col for col in cols if col in df_users_display.columns]
-            other_cols = [col for col in df_users_display.columns if col not in existing_cols and col != 'password']
-            display_cols = existing_cols + other_cols
-            st.dataframe(df_users_display[display_cols], use_container_width=True, hide_index=True)
+        # Filter out rows where self_rating is None before calculating mean
+        df_rated_goals = df_goals_with_dept.dropna(subset=['self_rating'])
+        if not df_rated_goals.empty:
+            avg_self_rating = df_rated_goals.groupby('Department')['self_rating'].mean().reset_index()
+            fig_self_rating = px.bar(avg_self_rating, x='Department', y='self_rating',
+                                    title='Average Self-Rating by Department',
+                                    labels={'self_rating': 'Average Rating (1-5)'},
+                                    color='Department',
+                                    template='plotly_white')
+            st.plotly_chart(fig_self_rating, use_container_width=True)
         else:
-            st.info("No users registered yet.")
+            st.info("No self-ratings available to display average self-rating by department.")
+
+        # Bar chart for Average Line Manager's Rating by Department
+        df_lm_rated_goals = df_goals_with_dept.dropna(subset=['line_manager_rating'])
+        if not df_lm_rated_goals.empty:
+            avg_lm_rating = df_lm_rated_goals.groupby('Department')['line_manager_rating'].mean().reset_index()
+            fig_lm_rating = px.bar(avg_lm_rating, x='Department', y='line_manager_rating',
+                                   title='Average Line Manager\'s Rating by Department',
+                                   labels={'line_manager_rating': 'Average Rating (1-5)'},
+                                   color='Department',
+                                   template='plotly_white')
+            st.plotly_chart(fig_lm_rating, use_container_width=True)
+        else:
+            st.info("No line manager ratings available to display average line manager's rating by department.")
+    else:
+        st.info("No performance goal data to generate statistics.")
+
+
+    st.subheader("All Performance Goals Table")
+    # Reorder columns for display
+    display_columns = [
+        "Employee Name", "goal_description", "collaborating_department", "status",
+        "employee_remark_update", "start_date", "end_date", "duration", "weighting_percent",
+        "self_rating", "line_manager_rating"
+    ]
+    df_goals_display = df_goals[display_columns].copy()
+    df_goals_display.columns = [
+        "Employee Name", "Goals", "Collaborating Department", "Status",
+        "Employee Remark/Update", "Start Date", "End Date", "Duration", "Weighting (%)",
+        "Self Rating", "Line Manager's Rating"
+    ]
+    st.dataframe(df_goals_display, use_container_width=True)
+
+    st.subheader("Filter Goals")
+    all_departments = sorted(list(set(user['profile']['department'] for user in users if 'profile' in user and 'department' in user['profile'])))
+    selected_department = st.selectbox("Filter by Department:", ["All"] + all_departments)
+
+    if selected_department != "All":
+        filtered_staff_ids = [user['profile']['staff_id'] for user in users if user.get('profile', {}).get('department') == selected_department]
+        df_filtered_goals = df_goals_display[df_goals_display['Employee Name'].isin([staff_id_to_name.get(sid) for sid in filtered_staff_ids])]
+        st.dataframe(df_filtered_goals, use_container_width=True)
+    else:
+        st.dataframe(df_goals_display, use_container_width=True)
+
+# --- Self-Appraisal (Staff & Admin/Manager) ---
+def submit_self_appraisal():
+    st.header("Submit Your Self-Appraisal")
+    current_user = st.session_state.current_user
+    current_user_staff_id = current_user['profile']['staff_id']
+    current_user_name = current_user['profile']['name']
+    current_user_designation = current_user['profile']['grade_level'] # Using grade_level as designation
+    current_user_department = current_user['profile']['department']
+
+    appraisals = load_data(SELF_APPRAISALS_FILE)
+    performance_goals = load_data(PERFORMANCE_GOALS_FILE)
+
+    # Find existing appraisal for the current user and period, or create a new one
+    current_year = str(datetime.now().year)
+    user_appraisal = next((app for app in appraisals if app['staff_id'] == current_user_staff_id and app['appraisal_period'] == current_year), None)
+
+    if user_appraisal is None:
+        user_appraisal = {
+            "appraisal_id": str(uuid.uuid4()),
+            "staff_id": current_user_staff_id,
+            "appraisal_period": current_year,
+            "employee_data": {
+                "name": current_user_name,
+                "designation": current_user_designation,
+                "department": current_user_department,
+                "date": datetime.now().isoformat().split('T')[0]
+            },
+            "key_status_ratings": {
+                "Not Started": 0, "In Progress": 0, "On Hold": 0, "Complete": 0,
+                "Exceeds Expectation": 5, "Meet Expectations": 4, "Average": 3,
+                "Requires Improvement": 2, "Unsatisfactory": 1
+            },
+            "section_a_goals": [],
+            "section_b_qualitative": {
+                "leadership_team_development": {"remark": "", "self_rating": None, "line_manager_rating": None},
+                "coordinate_optimize_resources": {"remark": "", "self_rating": None, "line_manager_rating": None},
+                "interpersonal": {"remark": "", "self_rating": None, "line_manager_rating": None}
+            },
+            "training_recommendation": "",
+            "hr_remark": "",
+            "md_remark": ""
+        }
+        appraisals.append(user_appraisal) # Add to list if new
 
     st.markdown("---")
-    st.subheader("Add New User")
-    with st.form("add_user_form", clear_on_submit=True):
-        new_username = st.text_input("Username (Email Address)", help="This will be the login ID.")
-        new_password = st.text_input("Temporary Password", type="password")
-        new_role = st.selectbox("Role", ["staff", "admin"])
-
-        st.markdown("##### User Profile Details")
-        profile_name = st.text_input("Full Name")
-        profile_staff_id = st.text_input("Staff ID (e.g., POL/2024/XXX)")
-        profile_dob = st.date_input("Date of Birth", value=date(2000, 1, 1))
-        profile_gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-        profile_grade_level = st.selectbox("Grade Level", ["Officer", "Manager", "MD", "Executive"])
-        profile_department = st.text_input("Department")
-        profile_education = st.text_input("Education Background")
-        profile_experience = st.text_area("Professional Experience")
-        profile_address = st.text_area("Address")
-        profile_phone = st.text_input("Phone Number")
-        profile_email = st.text_input("Email Address")
-        profile_work_anniversary = st.date_input("Work Anniversary", value=date.today())
-
-        add_user_submitted = st.form_submit_button("Add User")
-
-        if add_user_submitted:
-            if not new_username or not new_password or not profile_name or not profile_staff_id or not profile_department:
-                st.error("Please fill in all mandatory fields (Username, Password, Full Name, Staff ID, Department).")
-            elif any(user['username'] == new_username for user in st.session_state.users):
-                st.error("Username already exists. Please choose a different one.")
-            else:
-                new_user_obj = {
-                    "username": new_username,
-                    "password": pbkdf2_sha256.hash(new_password),
-                    "role": new_role,
-                    "profile": {
-                        "name": profile_name,
-                        "staff_id": profile_staff_id,
-                        "date_of_birth": profile_dob.isoformat(),
-                        "gender": profile_gender,
-                        "grade_level": profile_grade_level,
-                        "department": profile_department,
-                        "education_background": profile_education,
-                        "professional_experience": profile_experience,
-                        "address": profile_address,
-                        "phone_number": profile_phone,
-                        "email_address": profile_email,
-                        "training_attended": [], # Initialize as empty
-                        "work_anniversary": profile_work_anniversary.isoformat()
-                    }
-                }
-                st.session_state.users.append(new_user_obj)
-                save_data(st.session_state.users, USERS_FILE)
-                st.success(f"User '{new_username}' added successfully!")
-                st.rerun()
-    
+    st.markdown("### Instruction:")
+    st.markdown("The goals agreed on at the beginning of the year which are specific, measurable, achievable, time-bound and relevant should be written in the goals' column. It can be distributed and assigned weights based on the value of the goal. Section A totals 70% while Section B totals 30% to make a sum of 100%. The remark column would state the achievements. Where applicable, date of commencement and when the goal is completed to be stated in the start and end date column. Scores should be filled in the appropriate column.")
     st.markdown("---")
-    st.subheader("Edit / Delete User")
-    user_to_modify = st.selectbox("Select User to Edit/Delete", [""] + [user['username'] for user in st.session_state.users], key="select_user_to_modify")
-    
-    if user_to_modify:
-        selected_user = next((user for user in st.session_state.users if user['username'] == user_to_modify), None)
-        if selected_user:
-            with st.form("edit_delete_user_form", clear_on_submit=True):
-                st.write(f"Editing User: **{selected_user['username']}**")
-                
-                # Pre-fill fields for editing
-                edit_role = st.selectbox("Role", ["staff", "admin"], index=["staff", "admin"].index(selected_user['role']))
-                
-                st.markdown("##### User Profile Details")
-                edit_profile_name = st.text_input("Full Name", value=selected_user['profile'].get('name', ''))
-                edit_profile_staff_id = st.text_input("Staff ID", value=selected_user['profile'].get('staff_id', ''))
-                
-                # Handle date conversion for date_input default value
-                try:
-                    edit_profile_dob_val = datetime.strptime(selected_user['profile'].get('date_of_birth', '2000-01-01'), '%Y-%m-%d').date()
-                except ValueError:
-                    edit_profile_dob_val = date(2000, 1, 1) # Default if malformed
-                edit_profile_dob = st.date_input("Date of Birth", value=edit_profile_dob_val)
 
-                edit_profile_gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=["Male", "Female", "Other"].index(selected_user['profile'].get('gender', 'Male')))
-                edit_profile_grade_level = st.selectbox("Grade Level", ["Officer", "Manager", "MD", "Executive"], index=["Officer", "Manager", "MD", "Executive"].index(selected_user['profile'].get('grade_level', 'Officer')))
-                edit_profile_department = st.text_input("Department", value=selected_user['profile'].get('department', ''))
-                edit_profile_education = st.text_input("Education Background", value=selected_user['profile'].get('education_background', ''))
-                edit_profile_experience = st.text_area("Professional Experience", value=selected_user['profile'].get('professional_experience', ''))
-                edit_profile_address = st.text_area("Address", value=selected_user['profile'].get('address', ''))
-                edit_profile_phone = st.text_input("Phone Number", value=selected_user['profile'].get('phone_number', ''))
-                edit_profile_email = st.text_input("Email Address", value=selected_user['profile'].get('email_address', ''))
-                
-                try:
-                    edit_profile_work_anniversary_val = datetime.strptime(selected_user['profile'].get('work_anniversary', str(date.today())), '%Y-%m-%d').date()
-                except ValueError:
-                    edit_profile_work_anniversary_val = date.today()
-                edit_profile_work_anniversary = st.date_input("Work Anniversary", value=edit_profile_work_anniversary_val)
+    col_emp_data, col_ratings_key = st.columns([1, 1])
 
-                col_edit_del = st.columns(2)
-                with col_edit_del[0]:
-                    edit_submitted = st.form_submit_button("Update User")
-                with col_edit_del[1]:
-                    delete_submitted = st.form_submit_button("Delete User")
+    with col_emp_data:
+        st.subheader("Employee Data")
+        st.write(f"**Employee Name:** {user_appraisal['employee_data']['name']}")
+        st.write(f"**Designation:** {user_appraisal['employee_data']['designation']}")
+        st.write(f"**Department:** {user_appraisal['employee_data']['department']}")
+        st.write(f"**Date:** {user_appraisal['employee_data']['date']}")
 
-                if edit_submitted:
-                    for i, user in enumerate(st.session_state.users):
-                        if user['username'] == user_to_modify:
-                            st.session_state.users[i]['role'] = edit_role
-                            st.session_state.users[i]['profile'] = {
-                                "name": edit_profile_name,
-                                "staff_id": edit_profile_staff_id,
-                                "date_of_birth": edit_profile_dob.isoformat(),
-                                "gender": edit_profile_gender,
-                                "grade_level": edit_profile_grade_level,
-                                "department": edit_profile_department,
-                                "education_background": edit_profile_education,
-                                "professional_experience": edit_profile_experience,
-                                "address": edit_profile_address,
-                                "phone_number": edit_profile_phone,
-                                "email_address": edit_profile_email,
-                                "training_attended": selected_user['profile'].get('training_attended', []), # Keep existing
-                                "work_anniversary": edit_profile_work_anniversary.isoformat()
-                            }
-                            break
-                    save_data(st.session_state.users, USERS_FILE)
-                    st.success(f"User '{user_to_modify}' updated successfully!")
-                    st.rerun()
+    with col_ratings_key:
+        st.subheader("Key Status & Ratings")
+        ratings_data = {
+            "POINTS": [5, 4, 3, 2, 1],
+            "DESCRIPTION": ["Exceeds Expectation", "Meet Expectations", "Average", "Requires Improvement", "Unsatisfactory"],
+            "RATINGS": ["100% And Above", "80 - 99%", "60 - 79%", "40 - 59%", "0 - 39%"]
+        }
+        df_ratings = pd.DataFrame(ratings_data)
+        st.dataframe(df_ratings, hide_index=True)
 
-                if delete_submitted:
-                    st.session_state.users = [user for user in st.session_state.users if user['username'] != user_to_modify]
-                    save_data(st.session_state.users, USERS_FILE)
-                    st.warning(f"User '{user_to_modify}' deleted.")
-                    st.rerun()
+    st.markdown("---")
+    st.subheader("SECTION A: Performance Goals (70%)")
 
+    # Get user's performance goals to pre-populate Section A
+    user_performance_goals = [goal for goal in performance_goals if goal['staff_id'] == current_user_staff_id]
 
-# Upload Payroll (Admin)
-def admin_upload_payroll():
-    st.title("📤 Admin: Upload Payroll Data")
-    st.write("Upload a CSV file containing payroll information.")
+    # Initialize section_a_goals in appraisal with current performance goals
+    # This ensures that goals set previously are reflected and can be appraised
+    user_appraisal['section_a_goals'] = []
+    for goal in user_performance_goals:
+        appraisal_goal = next((g for g in user_appraisal['section_a_goals'] if g.get('goal_id') == goal['goal_id']), None)
+        if not appraisal_goal:
+            # Add new goals from performance_goals to appraisal if not already there
+            user_appraisal['section_a_goals'].append({
+                "goal_id": goal['goal_id'],
+                "goal_description": goal['goal_description'],
+                "collaborating_department": goal['collaborating_department'],
+                "status": goal['status'],
+                "employee_remark_update": goal['employee_remark_update'],
+                "start_date": goal['start_date'],
+                "end_date": goal['end_date'],
+                "duration": goal['duration'],
+                "weighting_percent": goal['weighting_percent'],
+                "self_rating": goal['self_rating'], # Use existing self_rating from goal if available
+                "line_manager_rating": goal['line_manager_rating'] # Use existing line_manager_rating from goal if available
+            })
 
-    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+    # Display and allow editing for Section A goals
+    st.write("Please review and update your goals and self-ratings:")
+    for i, goal in enumerate(user_appraisal['section_a_goals']):
+        st.markdown(f"**Goal {i+1}:**")
+        goal['goal_description'] = st.text_area(f"Goals {i+1}", value=goal['goal_description'], key=f"goal_desc_{i}")
+        goal['collaborating_department'] = st.text_input(f"Collaborating Department {i+1}", value=goal['collaborating_department'], key=f"collab_dept_{i}")
+        
+        # Ensure 'status' value from loaded data is in the selectbox options
+        status_options = ["Not Started", "In Progress", "On Hold", "Complete", "Pending Review"]
+        current_status_index = status_options.index(goal['status']) if goal['status'] in status_options else 0
+        goal['status'] = st.selectbox(f"Status {i+1}", status_options, index=current_status_index, key=f"status_{i}")
+        
+        goal['employee_remark_update'] = st.text_area(f"Employee Remark/Update {i+1}", value=goal['employee_remark_update'], key=f"remark_{i}")
+        
+        # Convert date strings to date objects for date_input
+        start_date_val = date.fromisoformat(goal['start_date']) if isinstance(goal['start_date'], str) else goal['start_date']
+        end_date_val = date.fromisoformat(goal['end_date']) if isinstance(goal['end_date'], str) else goal['end_date']
 
-    if uploaded_file is not None:
+        goal['start_date'] = st.date_input(f"Start Date {i+1}", value=start_date_val, key=f"start_date_{i}").isoformat()
+        goal['end_date'] = st.date_input(f"End Date {i+1}", value=end_date_val, key=f"end_date_{i}").isoformat()
+        
+        # Recalculate duration
         try:
-            df = pd.read_csv(uploaded_file)
-            st.dataframe(df) # Display uploaded CSV for review
+            duration_days = (date.fromisoformat(goal['end_date']) - date.fromisoformat(goal['start_date'])).days + 1
+            goal['duration'] = f"{duration_days} days"
+        except (ValueError, TypeError):
+            goal['duration'] = "N/A" # Handle invalid date formats
 
-            required_cols = ['staff_id', 'pay_period', 'gross_pay', 'net_pay', 'deductions', 'bonus', 'pay_date']
-            if not all(col in df.columns for col in required_cols):
-                st.error(f"Missing required columns. Please ensure the CSV contains: {', '.join(required_cols)}")
-                return
+        goal['weighting_percent'] = st.number_input(f"Weighting (%) {i+1}", min_value=0, max_value=100, value=goal['weighting_percent'], key=f"weighting_{i}")
+        
+        # Self Rating input
+        current_self_rating = goal['self_rating'] if goal['self_rating'] is not None else 0
+        goal['self_rating'] = st.slider(f"Self Rating (1-5) {i+1}", min_value=1, max_value=5, value=current_self_rating, key=f"self_rating_{i}")
+        
+        # Line Manager's Rating (read-only for employee, editable by manager)
+        current_line_manager_rating = goal['line_manager_rating'] if goal['line_manager_rating'] is not None else 0
+        st.slider(f"Line Manager's Rating (1-5) {i+1}", min_value=1, max_value=5, value=current_line_manager_rating, disabled=True, key=f"lm_rating_display_{i}")
+        
+        st.markdown("---")
 
-            if st.button("Process Payroll Upload"):
-                new_payroll_entries = df.to_dict(orient='records')
-                
-                # Append new entries to existing payroll data, avoid duplicates if pay_period and staff_id match
-                for new_entry in new_payroll_entries:
-                    exists = False
-                    for existing_entry in st.session_state.payroll_data:
-                        if (existing_entry.get('staff_id') == new_entry.get('staff_id') and
-                            existing_entry.get('pay_period') == new_entry.get('pay_period')):
-                            exists = True
-                            # Optionally, update existing entry instead of skipping
-                            # existing_entry.update(new_entry) 
-                            break
-                    if not exists:
-                        st.session_state.payroll_data.append(new_entry)
+    # Add button for more goals (if needed, though goals should ideally come from performance goals)
+    # For now, we'll assume goals are primarily managed in "Set Performance Goals"
+    # If users need to add ad-hoc goals during appraisal, this logic would need to be expanded.
 
-                save_data(st.session_state.payroll_data, PAYROLL_FILE)
-                st.success("Payroll data uploaded and processed successfully!")
-                st.rerun()
+    st.subheader("SECTION B: Qualitative Assessment (30%)")
+    st.write("Please provide your remarks and self-ratings for the following areas:")
 
-        except Exception as e:
-            st.error(f"Error reading CSV file: {e}")
+    # Leadership & Team Development
+    st.markdown("**Leadership & Team Development**")
+    user_appraisal['section_b_qualitative']['leadership_team_development']['remark'] = st.text_area(
+        "Remark on Leadership & Team Development:",
+        value=user_appraisal['section_b_qualitative']['leadership_team_development']['remark'],
+        key="leadership_remark"
+    )
+    current_b1_self_rating = user_appraisal['section_b_qualitative']['leadership_team_development']['self_rating'] if user_appraisal['section_b_qualitative']['leadership_team_development']['self_rating'] is not None else 0
+    user_appraisal['section_b_qualitative']['leadership_team_development']['self_rating'] = st.slider(
+        "Self Rating (1-5) for Leadership & Team Development:",
+        min_value=1, max_value=5, value=current_b1_self_rating, key="leadership_self_rating"
+    )
+    current_b1_lm_rating = user_appraisal['section_b_qualitative']['leadership_team_development']['line_manager_rating'] if user_appraisal['section_b_qualitative']['leadership_team_development']['line_manager_rating'] is not None else 0
+    st.slider(
+        "Line Manager's Rating (1-5) for Leadership & Team Development:",
+        min_value=1, max_value=5, value=current_b1_lm_rating, disabled=True, key="leadership_lm_rating_display"
+    )
+    st.markdown("---")
 
-# Assuming FPDF and XPos, YPos are imported:
-from fpdf import FPDF, XPos, YPos
-import os # Ensure os module is imported for path handling
+    # Coordinate and Optimize Resources
+    st.markdown("**Coordinate and Optimize the Use of Resources**")
+    user_appraisal['section_b_qualitative']['coordinate_optimize_resources']['remark'] = st.text_area(
+        "Remark on Resource Coordination:",
+        value=user_appraisal['section_b_qualitative']['coordinate_optimize_resources']['remark'],
+        key="resources_remark"
+    )
+    current_b2_self_rating = user_appraisal['section_b_qualitative']['coordinate_optimize_resources']['self_rating'] if user_appraisal['section_b_qualitative']['coordinate_optimize_resources']['self_rating'] is not None else 0
+    user_appraisal['section_b_qualitative']['coordinate_optimize_resources']['self_rating'] = st.slider(
+        "Self Rating (1-5) for Resource Coordination:",
+        min_value=1, max_value=5, value=current_b2_self_rating, key="resources_self_rating"
+    )
+    current_b2_lm_rating = user_appraisal['section_b_qualitative']['coordinate_optimize_resources']['line_manager_rating'] if user_appraisal['section_b_qualitative']['coordinate_optimize_resources']['line_manager_rating'] is not None else 0
+    st.slider(
+        "Line Manager's Rating (1-5) for Resource Coordination:",
+        min_value=1, max_value=5, value=current_b2_lm_rating, disabled=True, key="resources_lm_rating_display"
+    )
+    st.markdown("---")
 
-def generate_opex_capex_pdf(request_data):
-    pdf = FPDF()
-    pdf.add_page()
+    # Interpersonal
+    st.markdown("**Interpersonal**")
+    user_appraisal['section_b_qualitative']['interpersonal']['remark'] = st.text_area(
+        "Remark on Interpersonal Skills:",
+        value=user_appraisal['section_b_qualitative']['interpersonal']['remark'],
+        key="interpersonal_remark"
+    )
+    current_b3_self_rating = user_appraisal['section_b_qualitative']['interpersonal']['self_rating'] if user_appraisal['section_b_qualitative']['interpersonal']['self_rating'] is not None else 0
+    user_appraisal['section_b_qualitative']['interpersonal']['self_rating'] = st.slider(
+        "Self Rating (1-5) for Interpersonal Skills:",
+        min_value=1, max_value=5, value=current_b3_self_rating, key="interpersonal_self_rating"
+    )
+    current_b3_lm_rating = user_appraisal['section_b_qualitative']['interpersonal']['line_manager_rating'] if user_appraisal['section_b_qualitative']['interpersonal']['line_manager_rating'] is not None else 0
+    st.slider(
+        "Line Manager's Rating (1-5) for Interpersonal Skills:",
+        min_value=1, max_value=5, value=current_b3_lm_rating, disabled=True, key="interpersonal_lm_rating_display"
+    )
+    st.markdown("---")
 
-    # --- DEBUGGING FONT PATH ---
-    # Print current working directory to help locate font files
-    print(f"Current working directory: {os.getcwd()}")
-    # --- END DEBUGGING ---
+    st.subheader("Training Recommendation")
+    user_appraisal['training_recommendation'] = st.text_area(
+        "Training Recommendation:",
+        value=user_appraisal['training_recommendation'],
+        key="training_recommendation"
+    )
+    st.markdown("---")
 
-    # Define font file paths based on where you placed the .ttf files.
-    # CHOOSE ONE OPTION BELOW AND UNCOMMENT IT. COMMENT OUT THE OTHER.
+    st.subheader("HR's Remark")
+    st.text_area("HR's Remark:", value=user_appraisal['hr_remark'], disabled=True, key="hr_remark_display")
+    st.markdown("---")
 
-    # OPTION A: If you placed NotoSans-Regular.ttf and NotoSans-Bold.ttf
-    # directly in the SAME DIRECTORY as your hr_app.py file:
-    font_path_regular = 'NotoSans-Regular.ttf'
-    font_path_bold = 'NotoSans-Bold.ttf'
+    st.subheader("MD's Remark")
+    st.text_area("MD's Remark:", value=user_appraisal['md_remark'], disabled=True, key="md_remark_display")
+    st.markdown("---")
 
-    # OPTION B: If you placed them in a 'fonts' subdirectory within your DATA_DIR
-    # (e.g., your_project_folder/hr_data/fonts/NotoSans-Regular.ttf):
-    # Make sure DATA_DIR is defined globally in your script (e.g., DATA_DIR = "hr_data")
-    # font_path_regular = os.path.join(DATA_DIR, 'fonts', 'NotoSans-Regular.ttf')
-    # font_path_bold = os.path.join(DATA_DIR, 'fonts', 'NotoSans-Bold.ttf')
+    if st.button("Save Self-Appraisal"):
+        # Update the original performance_goals list with the self-ratings from appraisal
+        for app_goal in user_appraisal['section_a_goals']:
+            for i, p_goal in enumerate(performance_goals):
+                if p_goal.get('goal_id') == app_goal.get('goal_id'):
+                    performance_goals[i]['self_rating'] = app_goal['self_rating']
+                    performance_goals[i]['employee_remark_update'] = app_goal['employee_remark_update'] # Also update remark
+                    performance_goals[i]['status'] = app_goal['status'] # Also update status
+                    break
+        save_data(performance_goals, PERFORMANCE_GOALS_FILE) # Save updated goals
+
+        # Find the index of the current appraisal in the list to update it
+        try:
+            idx = next(i for i, app in enumerate(appraisals) if app['appraisal_id'] == user_appraisal['appraisal_id'])
+            appraisals[idx] = user_appraisal
+        except StopIteration:
+            # This case should ideally not happen if user_appraisal was found or appended
+            st.error("Error: Could not find appraisal to update. Please refresh.")
+            return
+
+        save_data(appraisals, SELF_APPRAISALS_FILE)
+        st.success("Self-Appraisal saved successfully!")
+        st.rerun()
 
 
-    default_font = 'Helvetica' # Fallback default
-    
-    try:
-        # Check if the font files exist before adding them
-        if os.path.exists(font_path_regular) and os.path.exists(font_path_bold):
-            pdf.add_font('NotoSans', '', font_path_regular, uni=True)
-            pdf.add_font('NotoSans', 'B', font_path_bold, uni=True)
-            pdf.add_font('NotoSans', 'BU', font_path_bold, uni=True) # For bold and underline
-            default_font = 'NotoSans'
-        else:
-            # If font files are not found, print a message to the console for debugging
-            print(f"Warning: NotoSans font files not found at '{font_path_regular}' or '{font_path_bold}'. Falling back to Helvetica.")
-            # No st.warning here, as it's for the app UI, not backend PDF generation
-            default_font = 'Helvetica'
-    except Exception as e:
-        print(f"Error adding NotoSans font: {e}. Falling back to Helvetica.")
-        default_font = 'Helvetica'
+def admin_manage_appraisals():
+    st.header("Manage Employee Appraisals (HR/Manager/MD)")
+    appraisals = load_data(SELF_APPRAISALS_FILE)
+    users = load_data(USERS_FILE)
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in users}
 
-    # Set font for the entire document
-    pdf.set_font(default_font, size=10)
+    if not appraisals:
+        st.info("No appraisals have been submitted yet.")
+        return
 
-    # Add a title
-    pdf.set_font(default_font, 'B', 16)
-    pdf.cell(0, 10, "OPEX/CAPEX Requisition Form", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
-    pdf.ln(10) # Add some space
+    # Filter appraisals by current year for easier management
+    current_year = str(datetime.now().year)
+    current_year_appraisals = [app for app in appraisals if app['appraisal_period'] == current_year]
 
-    # Set font for details
-    pdf.set_font(default_font, size=10)
+    if not current_year_appraisals:
+        st.info(f"No appraisals submitted for the year {current_year}.")
+        return
 
-    # Define a consistent line height for multi_cell
-    line_height = 6
+    # Select an employee's appraisal to review
+    appraisal_options = {
+        f"{staff_id_to_name.get(app['staff_id'], 'Unknown')} ({app['staff_id']}) - {app['appraisal_period']}": app['appraisal_id']
+        for app in current_year_appraisals
+    }
+    selected_appraisal_key = st.selectbox("Select an employee's appraisal to review:", [""] + list(appraisal_options.keys()))
 
-    # Helper function to add key-value pairs
-    def add_detail(key, value):
-        pdf.set_font(default_font, 'B', 10)
-        pdf.cell(50, line_height, f"{key}:", new_x=XPos.RIGHT) # Fixed width for key
-        pdf.set_font(default_font, '', 10)
-        available_width = pdf.w - pdf.l_margin - pdf.r_margin - 50 # 50 is key_cell_width
-        pdf.multi_cell(available_width, line_height, str(value), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    if selected_appraisal_key:
+        selected_appraisal_id = appraisal_options[selected_appraisal_key]
+        selected_appraisal = next(app for app in appraisals if app['appraisal_id'] == selected_appraisal_id)
+        appraisal_index = appraisals.index(selected_appraisal)
 
-    # Request Details
-    pdf.set_font(default_font, 'BU', 12)
-    pdf.cell(0, 10, "Request Details", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(2)
+        st.subheader(f"Reviewing Appraisal for {selected_appraisal['employee_data']['name']}")
 
-    add_detail("Request ID", request_data.get('request_id', 'N/A'))
-    add_detail("Submission Date", request_data.get('submission_date', 'N/A'))
-    add_detail("Requester Name", request_data.get('requester_name', 'N/A'))
-    add_detail("Requester Staff ID", request_data.get('requester_staff_id', 'N/A'))
-    add_detail("Requester Department", request_data.get('requester_department', 'N/A'))
-    add_detail("Request Type", request_data.get('request_type', 'N/A'))
-    add_detail("Item Description", request_data.get('item_description', 'N/A'))
-    add_detail("Expense Line", request_data.get('expense_line', 'N/A'))
-    
-    # Financial Details
-    pdf.ln(5)
-    pdf.set_font(default_font, 'BU', 12)
-    pdf.cell(0, 10, "Financial Details", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(2)
+        # Display Employee Data
+        st.markdown("### Employee Data")
+        st.write(f"**Employee Name:** {selected_appraisal['employee_data']['name']}")
+        st.write(f"**Designation:** {selected_appraisal['employee_data']['designation']}")
+        st.write(f"**Department:** {selected_appraisal['employee_data']['department']}")
+        st.write(f"**Date:** {selected_appraisal['employee_data']['date']}")
 
-    # Changed '₦' to 'NGN'
-    add_detail("Budgeted Amount", f"NGN {request_data.get('budgeted_amount', 0):,.2f}")
-    add_detail("Material Cost", f"NGN {request_data.get('material_cost', 0):,.2f}")
-    add_detail("Labor Cost", f"NGN {request_data.get('labor_cost', 0):,.2f}")
-    add_detail("Total Amount", f"NGN {request_data.get('total_amount', 0):,.2f}")
-    add_detail("WHT Percentage", f"{request_data.get('wht_percentage', 0)}%")
-    add_detail("WHT Amount", f"NGN {request_data.get('wht_amount', 0):,.2f}")
-    add_detail("Net Amount Payable", f"NGN {request_data.get('net_amount_payable', 0):,.2f}")
-    add_detail("Budget Balance (After Request)", f"NGN {request_data.get('budget_balance', 0):,.2f}")
+        # Display Key Status & Ratings
+        st.markdown("### Key Status & Ratings Guide")
+        ratings_data = {
+            "POINTS": [5, 4, 3, 2, 1],
+            "DESCRIPTION": ["Exceeds Expectation", "Meet Expectations", "Average", "Requires Improvement", "Unsatisfactory"],
+            "RATINGS": ["100% And Above", "80 - 99%", "60 - 79%", "40 - 59%", "0 - 39%"] # Corrected typo 40-59%
+        }
+        df_ratings = pd.DataFrame(ratings_data)
+        st.dataframe(df_ratings, hide_index=True)
 
-    # Justification
-    pdf.ln(5)
-    pdf.set_font(default_font, 'BU', 12)
-    pdf.cell(0, 10, "Justification", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(2)
-    add_detail("Justification", request_data.get('justification', 'N/A'))
+        st.markdown("---")
+        st.subheader("SECTION A: Performance Goals (70%)")
 
-    # Vendor Details
-    pdf.ln(5)
-    pdf.set_font(default_font, 'BU', 12)
-    pdf.cell(0, 10, "Vendor Details", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(2)
+        # Define is_manager here to ensure it's always set
+        is_manager = st.session_state.current_user['profile']['grade_level'] == 'Manager' or st.session_state.current_user['role'] == 'admin'
 
-    add_detail("Vendor Name", request_data.get('vendor_name', 'N/A'))
-    add_detail("Vendor Account Name", request_data.get('vendor_account_name', 'N/A'))
-    add_detail("Vendor Account No", request_data.get('vendor_account_no', 'N/A'))
-    add_detail("Vendor Bank", request_data.get('vendor_bank', 'N/A'))
+        # Display and allow manager to rate Section A goals
+        for i, goal in enumerate(selected_appraisal['section_a_goals']):
+            st.markdown(f"**Goal {i+1}:** {goal['goal_description']}")
+            st.write(f"**Collaborating Department:** {goal['collaborating_department']}")
+            st.write(f"**Status:** {goal['status']}")
+            st.write(f"**Employee Remark/Update:** {goal['employee_remark_update']}")
+            st.write(f"**Start Date:** {goal['start_date']}")
+            st.write(f"**End Date:** {goal['end_date']}")
+            st.write(f"**Duration:** {goal['duration']}")
+            st.write(f"**Weighting (%):** {goal['weighting_percent']}")
+            st.write(f"**Self Rating (1-5):** {goal['self_rating'] if goal['self_rating'] is not None else 'Not Rated'}")
 
-    # Approval History
-    pdf.ln(5)
-    pdf.set_font(default_font, 'BU', 12)
-    pdf.cell(0, 10, "Approval History", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(2)
-
-    if request_data.get('approval_history'):
-        for entry in request_data['approval_history']:
-            pdf.set_font(default_font, 'B', 10)
-            history_text = (
-                f"- {entry.get('approver_role')} by {entry.get('approver_name')} "
-                f"on {entry.get('date')}: {entry.get('status')}. "
-                f"Comment: {entry.get('comment', 'No comment.')}"
+            current_lm_rating = goal['line_manager_rating'] if goal['line_manager_rating'] is not None else 0
+            selected_appraisal['section_a_goals'][i]['line_manager_rating'] = st.slider(
+                f"Line Manager's Rating (1-5) for Goal {i+1}",
+                min_value=1, max_value=5, value=current_lm_rating,
+                disabled=not is_manager, key=f"lm_rating_goal_{i}_{selected_appraisal_id}"
             )
-            pdf.multi_cell(0, line_height, history_text, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    else:
-        pdf.set_font(default_font, '', 10)
-        pdf.cell(0, line_height, "No approval history yet.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    # Final Status
-    pdf.ln(5)
-    pdf.set_font(default_font, 'BU', 12)
-    pdf.cell(0, 10, "Final Status", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(2)
-    pdf.set_font(default_font, 'B', 10)
-    pdf.cell(0, line_height, f"Status: {request_data.get('final_status', 'Pending')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-
-    # Save the PDF
-    pdf_dir = os.path.join(DATA_DIR, "opex_capex_pdfs")
-    os.makedirs(pdf_dir, exist_ok=True)
-    pdf_filename = f"opex_capex_{request_data['request_id']}.pdf"
-    pdf_path = os.path.join(pdf_dir, pdf_filename)
-    pdf.output(pdf_path)
-    return pdf_path
-
-            
-def handle_opex_capex_approval(request, user_approval_level, comment, status, approver_id, is_admin):
-    # Ensure all_opex_capex_requests is loaded
-    st.session_state.opex_capex_requests = load_data(OPEX_CAPEX_REQUESTS_FILE)
-
-    # Find the request by ID
-    found_request_index = -1
-    for i, req in enumerate(st.session_state.opex_capex_requests):
-        if req.get('request_id') == request['request_id']:
-            found_request_index = i
-            break
-
-    if found_request_index == -1:
-        st.error("Error: Request not found in the database.")
-        return
-
-    current_request = st.session_state.opex_capex_requests[found_request_index]
-    current_stage_index = current_request.get('current_approval_stage', 0)
-    
-    # Check if the request is already finalized
-    if current_request.get('final_status') in ["Approved", "Rejected"]:
-        st.warning(f"This request has already been '{current_request['final_status']}'. No further action can be taken.")
-        return
-
-    # Check if the current user is authorized to approve at this stage
-    if not is_admin:
-        if user_approval_level != current_stage_index:
-            st.error("You are not the current designated approver for this stage.")
-            return
-        
-        # Ensure the current stage index is valid for APPROVAL_CHAIN
-        if current_stage_index >= len(APPROVAL_CHAIN):
-            st.error("Error: Approval chain index out of bounds for this request.")
-            return
-
-    # Get the current approver's role from the approval chain
-    approver_role_info = APPROVAL_CHAIN[current_stage_index]
-    approver_role = approver_role_info['role_name'] # This should always be a string
-
-    # Ensure approver_role is a string before calling .lower() or using in string contexts
-    # This check is a safeguard, as 'role_name' from APPROVAL_CHAIN should be a string.
-    if not isinstance(approver_role, str):
-        actual_approver_role_name = str(approver_role)
-    else:
-        actual_approver_role_name = approver_role
-
-    # Construct the status key for the current approver
-    # Use actual_approver_role_name which is guaranteed to be a string
-    stage_key = f"status_{actual_approver_role_name.lower().replace(' ', '_')}"
-
-    current_request[stage_key] = status
-    current_request.setdefault('approval_history', []).append({
-        "approver_role": actual_approver_role_name, # Use the string version of the role here
-        "approver_name": approver_id,
-        "comment": comment,
-        "status": status,
-        "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    })
-
-    # Move to next approval stage if approved and not final
-    if status == "Approved" and current_stage_index + 1 < len(APPROVAL_CHAIN):
-        current_request['current_approval_stage'] = current_stage_index + 1
-        st.success(f"Request {request['request_id']} approved by {actual_approver_role_name}. Moving to next stage.")
-    else:
-        current_request['final_status'] = status  # Either final approval or rejection
-        if status == "Approved":
-            st.success(f"Request {request['request_id']} fully approved!")
-            # Regenerate PDF if fully approved
-            pdf_path = generate_opex_capex_pdf(current_request)
-            current_request['pdf_path'] = pdf_path
-        else:
-            st.error(f"Request {request['request_id']} has been Rejected.")
-
-    save_data(st.session_state.opex_capex_requests, OPEX_CAPEX_REQUESTS_FILE)
-    st.rerun() # Rerun to update the UI
-
-# Manage OPEX/CAPEX Approvals
-def manage_opex_capex_approvals():
-    st.title("✅ Manage OPEX/CAPEX Approvals")
-
-    current_user_id = st.session_state.current_user['username']
-    is_admin = st.session_state.current_user['role'] == 'admin'
-
-    all_requests = st.session_state.opex_capex_requests
-
-    # Determine the current user's approval level
-    current_user_profile = st.session_state.current_user.get('profile', {})
-    current_user_department = current_user_profile.get('department')
-    current_user_grade = current_user_profile.get('grade_level')
-
-    user_approval_level = -1 # -1 means not an approver
-    if is_admin:
-        user_approval_level = len(APPROVAL_CHAIN) # Admin can approve anything
-    else:
-        for i, approver_role_info in enumerate(APPROVAL_CHAIN):
-            if (current_user_department == approver_role_info['department'] and
-                    current_user_grade == approver_role_info['grade_level']):
-                user_approval_level = i
-                break
-
-    if user_approval_level == -1:
-        st.warning("You are not authorized to approve OPEX/CAPEX requests.")
-        return
-
-    pending_requests = []
-    for req in all_requests:
-        # Determine the required approval level for this request
-        current_approval_index = req.get('current_approval_level', 0)
-        final_status = req.get('final_status', 'Pending')
-
-        # Check if the user is the next required approver OR an admin
-        if final_status == 'Pending':
-            if is_admin: # Admin can see all pending requests
-                pending_requests.append(req)
-            elif current_approval_index < len(APPROVAL_CHAIN):
-                required_approver_info = APPROVAL_CHAIN[current_approval_index]
-                if (current_user_department == required_approver_info['department'] and
-                        current_user_grade == required_approver_info['grade_level']):
-                    pending_requests.append(req)
-
-    if not pending_requests:
-        st.info("No OPEX/CAPEX requests pending your approval.")
-        return
-
-    # Ensure all requests have a 'request_id' before DataFrame conversion and display
-    # Filter out any requests that might be malformed and missing 'request_id'
-    valid_pending_requests = [req for req in pending_requests if 'request_id' in req]
-    if not valid_pending_requests:
-        st.info("No valid OPEX/CAPEX requests to display.")
-        return
-
-    df_pending = pd.DataFrame(valid_pending_requests)
-
-    # Convert submission_date with format ISO8601, handling errors
-    df_display = df_pending[['request_id', 'requester_name', 'request_type', 'item_description',
-                             'total_amount', 'submission_date', 'final_status']].copy()
-
-    df_display['submission_date'] = pd.to_datetime(df_display['submission_date'], errors='coerce', format='ISO8601').dt.date
-
-    # Safely convert 'request_id' to string type to avoid ArrowInvalid if it's mixed
-    df_display['request_id'] = df_display['request_id'].astype(str)
-
-    st.subheader("Pending OPEX/CAPEX Requests")
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
-
-    # Ensure options for selectbox are only valid string request IDs
-    selected_request_id = st.selectbox(
-        "Select Request to Review:",
-        options=[""] + [str(req['request_id']) for req in valid_pending_requests],
-        key="select_opex_capex_request"
-    )
-
-    if selected_request_id:
-        selected_request = next((req for req in valid_pending_requests if str(req['request_id']) == selected_request_id), None)
-
-        if selected_request:
             st.markdown("---")
-            st.subheader(f"Reviewing Request: {selected_request_id}")
 
-            # Display request details
-            st.write(f"**Requester Name:** {selected_request.get('requester_name', 'N/A')}")
-            st.write(f"**Requester Staff ID:** {selected_request.get('requester_staff_id', 'N/A')}")
-            st.write(f"**Requester Department:** {selected_request.get('requester_department', 'N/A')}")
-            st.write(f"**Request Type:** {selected_request.get('request_type', 'N/A')}")
-            st.write(f"**Item Description:** {selected_request.get('item_description', 'N/A')}")
-            st.write(f"**Expense Line:** {selected_request.get('expense_line', 'N/A')}")
-            st.write(f"**Budgeted Amount:** ₦{selected_request.get('budgeted_amount', 0):,.2f}")
-            st.write(f"**Material Cost:** ₦{selected_request.get('material_cost', 0):,.2f}")
-            st.write(f"**Labor Cost:** ₦{selected_request.get('labor_cost', 0):,.2f}")
-            st.write(f"**Total Amount:** ₦{selected_request.get('total_amount', 0):,.2f}")
-            st.write(f"**WHT Percentage:** {selected_request.get('wht_percentage', 0)}%")
-            st.write(f"**WHT Amount:** ₦{selected_request.get('wht_amount', 0):,.2f}")
-            st.write(f"**Net Amount Payable:** ₦{selected_request.get('net_amount_payable', 0):,.2f}")
-            st.write(f"**Budget Balance (After Request):** ₦{selected_request.get('budget_balance', 0):,.2f}")
-            st.write(f"**Justification:** {selected_request.get('justification', 'N/A')}")
-            st.write(f"**Vendor Name:** {selected_request.get('vendor_name', 'N/A')}")
-            st.write(f"**Vendor Account Name:** {selected_request.get('vendor_account_name', 'N/A')}")
-            st.write(f"**Vendor Account No:** {selected_request.get('vendor_account_no', 'N/A')}")
-            st.write(f"**Vendor Bank:** {selected_request.get('vendor_bank', 'N/A')}")
-            st.write(f"**Submission Date:** {selected_request.get('submission_date', 'N/A')}")
-            st.write(f"**Current Status:** **{selected_request.get('final_status', 'Pending')}**")
+        st.subheader("SECTION B: Qualitative Assessment (30%)")
+        is_hr_or_md = st.session_state.current_user['profile']['department'] in ["HR", "Executive"] or st.session_state.current_user['role'] == 'admin'
 
-            # Display attached document if any
-            if selected_request.get('document_path') and os.path.exists(selected_request['document_path']):
-                st.download_button(
-                    label=f"Download Attached Document: {os.path.basename(selected_request['document_path'])}",
-                    data=open(selected_request['document_path'], "rb").read(),
-                    file_name=os.path.basename(selected_request['document_path']),
-                    mime="application/octet-stream",
-                    key=f"download_doc_{selected_request_id}"
-                )
-            else:
-                st.info("No document attached to this request.")
+        # Leadership & Team Development
+        st.markdown("**Leadership & Team Development**")
+        st.write(f"**Employee Remark:** {selected_appraisal['section_b_qualitative']['leadership_team_development']['remark']}")
+        st.write(f"**Self Rating (1-5):** {selected_appraisal['section_b_qualitative']['leadership_team_development']['self_rating'] if selected_appraisal['section_b_qualitative']['leadership_team_development']['self_rating'] is not None else 'Not Rated'}")
+        current_b1_lm_rating = selected_appraisal['section_b_qualitative']['leadership_team_development']['line_manager_rating'] if selected_appraisal['section_b_qualitative']['leadership_team_development']['line_manager_rating'] is not None else 0
+        selected_appraisal['section_b_qualitative']['leadership_team_development']['line_manager_rating'] = st.slider(
+            "Line Manager's Rating (1-5) for Leadership & Team Development:",
+            min_value=1, max_value=5, value=current_b1_lm_rating,
+            disabled=not is_manager, key=f"lm_rating_b1_{selected_appraisal_id}"
+        )
+        st.markdown("---")
 
-            st.markdown("---")
-            st.subheader("Approval Action")
-            comment = st.text_area("Your Comment:", key=f"approval_comment_{selected_request_id}")
+        # Coordinate and Optimize Resources
+        st.markdown("**Coordinate and Optimize the Use of Resources**")
+        st.write(f"**Employee Remark:** {selected_appraisal['section_b_qualitative']['coordinate_optimize_resources']['remark']}")
+        st.write(f"**Self Rating (1-5):** {selected_appraisal['section_b_qualitative']['coordinate_optimize_resources']['self_rating'] if selected_appraisal['section_b_qualitative']['coordinate_optimize_resources']['self_rating'] is not None else 'Not Rated'}")
+        current_b2_lm_rating = selected_appraisal['section_b_qualitative']['coordinate_optimize_resources']['line_manager_rating'] if selected_appraisal['section_b_qualitative']['coordinate_optimize_resources']['line_manager_rating'] is not None else 0
+        selected_appraisal['section_b_qualitative']['coordinate_optimize_resources']['line_manager_rating'] = st.slider(
+            "Line Manager's Rating (1-5) for Resource Coordination:",
+            min_value=1, max_value=5, value=current_b2_lm_rating,
+            disabled=not is_manager, key=f"lm_rating_b2_{selected_appraisal_id}"
+        )
+        st.markdown("---")
 
-            col_approve, col_reject = st.columns(2)
-            with col_approve:
-                if st.button("Approve", key=f"approve_opex_capex_{selected_request_id}"):
-                    handle_opex_capex_approval(selected_request, user_approval_level, comment, 'Approved', current_user_id, is_admin)
-            with col_reject:
-                if st.button("Reject", key=f"reject_opex_capex_{selected_request_id}"):
-                    handle_opex_capex_approval(selected_request, user_approval_level, comment, 'Rejected', current_user_id, is_admin)
+        # Interpersonal
+        st.markdown("**Interpersonal**")
+        st.write(f"**Employee Remark:** {selected_appraisal['section_b_qualitative']['interpersonal']['remark']}")
+        st.write(f"**Self Rating (1-5):** {selected_appraisal['section_b_qualitative']['interpersonal']['self_rating'] if selected_appraisal['section_b_qualitative']['interpersonal']['self_rating'] is not None else 'Not Rated'}")
+        current_b3_lm_rating = selected_appraisal['section_b_qualitative']['interpersonal']['line_manager_rating'] if selected_appraisal['section_b_qualitative']['interpersonal']['line_manager_rating'] is not None else 0
+        selected_appraisal['section_b_qualitative']['interpersonal']['line_manager_rating'] = st.slider(
+            "Line Manager's Rating (1-5) for Interpersonal Skills:",
+            min_value=1, max_value=5, value=current_b3_lm_rating,
+            disabled=not is_manager, key=f"lm_rating_b3_{selected_appraisal_id}"
+        )
+        st.markdown("---")
 
-            st.markdown("---")
-            st.subheader("Approval History")
-            if selected_request.get('approval_history'):
-                for entry in selected_request['approval_history']:
-                    st.write(f"- **{entry.get('approver_role')}** by **{entry.get('approver_name')}** on **{entry.get('date')}**: **{entry.get('status')}**. Comment: {entry.get('comment', 'No comment.')}")
-            else:
-                st.info("No approval history for this request yet.")
-        else: # This 'else' is correctly aligned with 'if selected_request:'
-            st.warning("Selected request not found.")
+        st.subheader("Training Recommendation")
+        selected_appraisal['training_recommendation'] = st.text_area(
+            "Training Recommendation:",
+            value=selected_appraisal['training_recommendation'],
+            disabled=not is_manager, # Only managers/admin can recommend training
+            key=f"training_rec_{selected_appraisal_id}"
+        )
+        st.markdown("---")
 
-# Manage Leave Approvals (Admin)
-def admin_manage_leave_approvals():
-    st.title("✅ Manage Leave Approvals")
+        st.subheader("HR's Remark")
+        selected_appraisal['hr_remark'] = st.text_area(
+            "HR's Remark:",
+            value=selected_appraisal['hr_remark'],
+            disabled=not (st.session_state.current_user['profile']['department'] == "HR" or st.session_state.current_user['role'] == 'admin'),
+            key=f"hr_remark_{selected_appraisal_id}"
+        )
+        st.markdown("---")
 
-    # Ensure all_leave_requests is loaded
-    all_leave_requests = st.session_state.leave_requests
+        st.subheader("MD's Remark")
+        selected_appraisal['md_remark'] = st.text_area(
+            "MD's Remark:",
+            value=selected_appraisal['md_remark'],
+            disabled=not (st.session_state.current_user['profile']['grade_level'] == "MD" or st.session_state.current_user['role'] == 'admin'),
+            key=f"md_remark_{selected_appraisal_id}"
+        )
+        st.markdown("---")
 
-    # Filter for pending requests
-    pending_requests = [req for req in all_leave_requests if req.get('status') == 'Pending']
+        if st.button("Save Appraisal Review"):
+            # Update the original performance_goals list with the line_manager_ratings from appraisal
+            performance_goals_data = load_data(PERFORMANCE_GOALS_FILE) # Reload to ensure latest
+            for app_goal in selected_appraisal['section_a_goals']:
+                for i, p_goal in enumerate(performance_goals_data):
+                    if p_goal.get('goal_id') == app_goal.get('goal_id'):
+                        performance_goals_data[i]['line_manager_rating'] = app_goal['line_manager_rating']
+                        break
+            save_data(performance_goals_data, PERFORMANCE_GOALS_FILE) # Save updated goals
 
-    if not pending_requests:
-        st.info("No leave requests pending approval.")
+            appraisals[appraisal_index] = selected_appraisal
+            save_data(appraisals, SELF_APPRAISALS_FILE)
+            st.success("Appraisal review saved successfully!")
+            st.rerun()
+
+# --- Chat Feature (Personalized) ---
+def get_unread_messages(recipient_staff_id):
+    chat_messages = load_data(CHAT_MESSAGES_FILE)
+    unread_count = 0
+    for msg in chat_messages:
+        if msg['receiver_staff_id'] == recipient_staff_id and not msg.get('read', False):
+            unread_count += 1
+    return unread_count
+
+def chat_page():
+    st.header("Personalized Chat")
+    current_user_staff_id = st.session_state.current_user['profile']['staff_id']
+    current_user_name = st.session_state.current_user['profile']['name']
+    all_users = load_data(USERS_FILE)
+    chat_messages = load_data(CHAT_MESSAGES_FILE)
+
+    # Get a list of other users to chat with
+    other_users = [user for user in all_users if user['profile']['staff_id'] != current_user_staff_id]
+    
+    if not other_users:
+        st.info("No other users available to chat with.")
         return
 
-    # Preprocess requests to flatten requester_name and staff_id for DataFrame
-    processed_requests = []
-    for req in pending_requests:
-        # Find the user associated with the request to get their profile details
-        requester_username = req.get('requester_username')
-        requester_user = next((user for user in st.session_state.users if user['username'] == requester_username), None)
-        
-        requester_name = "N/A"
-        staff_id = "N/A"
-        if requester_user and 'profile' in requester_user:
-            requester_name = requester_user['profile'].get('name', 'N/A')
-            staff_id = requester_user['profile'].get('staff_id', 'N/A')
+    # Create a mapping from staff_id to full name for display
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in all_users}
 
-        processed_req = req.copy() # Create a copy to avoid modifying original session state data directly
-        processed_req['requester_name'] = requester_name
-        processed_req['staff_id'] = staff_id
-        processed_requests.append(processed_req)
+    # Select recipient
+    recipient_options = {user['profile']['name']: user['profile']['staff_id'] for user in other_users}
+    selected_recipient_name = st.selectbox("Chat with:", [""] + list(recipient_options.keys()))
 
-    df_pending = pd.DataFrame(processed_requests)
+    selected_recipient_staff_id = None
+    if selected_recipient_name:
+        selected_recipient_staff_id = recipient_options[selected_recipient_name]
+        st.subheader(f"Chat with {selected_recipient_name}")
 
-    # Convert 'request_id' to string type to avoid ArrowInvalid error
-    if 'request_id' in df_pending.columns:
-        df_pending['request_id'] = df_pending['request_id'].astype(str)
-    
-    # Convert 'num_days' to string type to avoid ArrowInvalid if it contains mixed types
-    if 'num_days' in df_pending.columns:
-        df_pending['num_days'] = df_pending['num_days'].astype(str)
+        # Filter messages between current user and selected recipient
+        # Messages where current user is sender AND selected recipient is receiver
+        # OR messages where selected recipient is sender AND current user is receiver
+        conversation_messages = [
+            msg for msg in chat_messages
+            if (msg['sender_staff_id'] == current_user_staff_id and msg['receiver_staff_id'] == selected_recipient_staff_id) or
+               (msg['sender_staff_id'] == selected_recipient_staff_id and msg['receiver_staff_id'] == current_user_staff_id)
+        ]
 
-    # Convert date columns to datetime objects, handling errors
-    for col in ['submission_date', 'start_date', 'end_date']:
-        if col in df_pending.columns:
-            df_pending[col] = pd.to_datetime(df_pending[col], errors='coerce').dt.date
+        # Sort messages by timestamp
+        conversation_messages.sort(key=lambda x: x['timestamp'])
 
-    # Define columns to display
-    display_cols = ['request_id', 'submission_date', 'requester_name', 'staff_id', 'leave_type', 'start_date', 'end_date', 'num_days', 'reason', 'status']
-    
-    # Filter display_cols to only include columns actually present in df_pending
-    display_cols = [col for col in display_cols if col in df_pending.columns]
-
-    st.subheader("Pending Leave Requests")
-    st.dataframe(df_pending[display_cols], use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-    st.subheader("Approve/Decline Leave Request")
-
-    selected_request_id = st.selectbox(
-        "Select Request ID to review:",
-        options=[""] + df_pending['request_id'].tolist(),
-        key="admin_leave_select_request"
-    )
-
-    if selected_request_id:
-        selected_request = next((req for req in processed_requests if req['request_id'] == selected_request_id), None)
-
-        if selected_request:
-            st.write(f"**Requester:** {selected_request.get('requester_name', 'N/A')} ({selected_request.get('staff_id', 'N/A')})")
-            st.write(f"**Leave Type:** {selected_request.get('leave_type', 'N/A')}")
-            st.write(f"**Period:** {selected_request.get('start_date', 'N/A')} to {selected_request.get('end_date', 'N/A')} ({selected_request.get('num_days', 'N/A')} days)")
-            st.write(f"**Reason:** {selected_request.get('reason', 'N/A')}")
-            st.write(f"**Current Status:** **{selected_request.get('status', 'Pending')}**")
-
-            comment = st.text_area("Add a comment (optional):", key=f"admin_leave_comment_{selected_request_id}")
-
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Approve", key=f"approve_leave_{selected_request_id}"):
-                    handle_leave_approval(selected_request['request_id'], 'Approved', comment)
-            with col2:
-                if st.button("Decline", key=f"decline_leave_{selected_request_id}"):
-                    handle_leave_approval(selected_request['request_id'], 'Declined', comment)
-        else:
-            st.warning("Selected request not found.")
-
-    st.markdown("---")
-    st.subheader("All Leave Requests (Overview)")
-    
-    # Preprocess all requests for overview DataFrame
-    all_processed_requests = []
-    for req in all_leave_requests:
-        requester_username = req.get('requester_username')
-        requester_user = next((user for user in st.session_state.users if user['username'] == requester_username), None)
-        
-        requester_name = "N/A"
-        staff_id = "N/A"
-        if requester_user and 'profile' in requester_user:
-            requester_name = requester_user['profile'].get('name', 'N/A')
-            staff_id = requester_user['profile'].get('staff_id', 'N/A')
-
-        processed_req = req.copy()
-        processed_req['requester_name'] = requester_name
-        processed_req['staff_id'] = staff_id
-        all_processed_requests.append(processed_req)
-
-    if all_processed_requests:
-        df_all_requests = pd.DataFrame(all_processed_requests)
-
-        # Convert 'request_id' to string type
-        if 'request_id' in df_all_requests.columns:
-            df_all_requests['request_id'] = df_all_requests['request_id'].astype(str)
-        
-        # Convert 'num_days' to string type
-        if 'num_days' in df_all_requests.columns:
-            df_all_requests['num_days'] = df_all_requests['num_days'].astype(str)
-
-        # Convert date columns to datetime objects, handling errors
-        for col in ['submission_date', 'start_date', 'end_date']:
-            if col in df_all_requests.columns:
-                df_all_requests[col] = pd.to_datetime(df_all_requests[col], errors='coerce').dt.date
-
-        # Define columns for the overview table
-        overview_display_cols = ['request_id', 'submission_date', 'requester_name', 'staff_id', 'leave_type', 'start_date', 'end_date', 'num_days', 'reason', 'status']
-        overview_display_cols = [col for col in overview_display_cols if col in df_all_requests.columns]
-
-        st.dataframe(df_all_requests[overview_display_cols], use_container_width=True, hide_index=True)
-    else:
-        st.info("No leave requests submitted yet.")
-
-
-# Manage Beneficiaries (Admin)
-def admin_manage_beneficiaries():
-    st.title("🏦 Admin: Manage Beneficiaries")
-
-    st.subheader("Current Beneficiaries")
-    if st.session_state.beneficiaries:
-        # Convert dictionary to a list of dicts for DataFrame
-        beneficiary_list = [{"Name": name, **details} for name, details in st.session_state.beneficiaries.items()]
-        df_beneficiaries = pd.DataFrame(beneficiary_list)
-        st.dataframe(df_beneficiaries, use_container_width=True, hide_index=True)
-    else:
-        st.info("No beneficiaries configured yet.")
-
-    st.markdown("---")
-    st.subheader("Add New Beneficiary")
-    with st.form("add_beneficiary_form", clear_on_submit=True):
-        new_beneficiary_name = st.text_input("Beneficiary Name (Company/Individual)")
-        new_account_name = st.text_input("Account Name")
-        new_account_no = st.text_input("Account Number")
-        new_bank = st.text_input("Bank Name")
-        
-        add_bene_submitted = st.form_submit_button("Add Beneficiary")
-
-        if add_bene_submitted:
-            if not new_beneficiary_name or not new_account_name or not new_account_no or not new_bank:
-                st.error("Please fill in all beneficiary details.")
-            elif new_beneficiary_name in st.session_state.beneficiaries:
-                st.error("Beneficiary with this name already exists.")
-            else:
-                st.session_state.beneficiaries[new_beneficiary_name] = {
-                    "Account Name": new_account_name,
-                    "Account No": new_account_no,
-                    "Bank": new_bank
-                }
-                save_data(st.session_state.beneficiaries, BENEFICIARIES_FILE)
-                st.success(f"Beneficiary '{new_beneficiary_name}' added successfully!")
-                st.rerun()
-    
-    st.markdown("---")
-    st.subheader("Edit / Delete Beneficiary")
-    # Exclude "Other (Manually Enter Details)" from selectable options for editing/deleting
-    editable_beneficiaries = [b for b in list(st.session_state.beneficiaries.keys()) if b != "Other (Manually Enter Details)"]
-    bene_to_modify = st.selectbox("Select Beneficiary to Edit/Delete", [""] + editable_beneficiaries, key="select_bene_to_modify")
-    
-    if bene_to_modify:
-        selected_bene = st.session_state.beneficiaries.get(bene_to_modify)
-        if selected_bene:
-            with st.form("edit_delete_beneficiary_form", clear_on_submit=True):
-                st.write(f"Editing Beneficiary: **{bene_to_modify}**")
+        # Display messages
+        chat_container = st.container(height=400, border=True)
+        if conversation_messages:
+            for msg in conversation_messages:
+                sender_name = staff_id_to_name.get(msg['sender_staff_id'], 'Unknown')
+                message_time = datetime.fromisoformat(msg['timestamp']).strftime("%Y-%m-%d %H:%M")
                 
-                edit_account_name = st.text_input("Account Name", value=selected_bene.get('Account Name', ''))
-                edit_account_no = st.text_input("Account Number", value=selected_bene.get('Account No', ''))
-                edit_bank = st.text_input("Bank Name", value=selected_bene.get('Bank', ''))
+                if msg['sender_staff_id'] == current_user_staff_id:
+                    chat_container.markdown(f"**You** ({message_time}): {msg['message']}")
+                else:
+                    chat_container.markdown(f"**{sender_name}** ({message_time}): {msg['message']}")
+                
+                # Mark message as read if current user is the receiver and it's unread
+                if msg['receiver_staff_id'] == current_user_staff_id and not msg.get('read', False):
+                    msg['read'] = True # Mark as read
+                    # This modification needs to be saved back to the file
+                    # To avoid saving on every message display, we'll save when a new message is sent or page is reloaded.
+                    # For now, let's just update the in-memory object.
+                    # A more robust solution would involve a 'mark all as read' button or saving on page exit.
+        else:
+            chat_container.info("No messages in this conversation yet.")
 
-                col_edit_del_bene = st.columns(2)
-                with col_edit_del_bene[0]:
-                    edit_bene_submitted = st.form_submit_button("Update Beneficiary")
-                with col_edit_del_bene[1]:
-                    delete_bene_submitted = st.form_submit_button("Delete Beneficiary")
+        # Message input
+        new_message = st.text_input("Type your message here:", key="chat_input")
+        if st.button("Send Message"):
+            if new_message:
+                new_chat_entry = {
+                    "message_id": str(uuid.uuid4()),
+                    "sender_staff_id": current_user_staff_id,
+                    "receiver_staff_id": selected_recipient_staff_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "message": new_message,
+                    "read": False # Message is unread by recipient initially
+                }
+                chat_messages.append(new_chat_entry)
+                save_data(chat_messages, CHAT_MESSAGES_FILE)
+                st.success("Message sent!")
+                st.rerun() # Rerun to clear input and show new message
 
-                if edit_bene_submitted:
-                    st.session_state.beneficiaries[bene_to_modify] = {
-                        "Account Name": edit_account_name,
-                        "Account No": edit_account_no,
-                        "Bank": edit_bank
-                    }
-                    save_data(st.session_state.beneficiaries, BENEFICIARIES_FILE)
-                    st.success(f"Beneficiary '{bene_to_modify}' updated successfully!")
-                    st.rerun()
+    # After sending a message or selecting a new chat, ensure all displayed messages are marked as read for the current user
+    # This is a simple approach to mark messages as read. A more sophisticated system might involve
+    # a separate 'read status' for each user or a 'mark as read' button.
+    for msg in chat_messages:
+        if msg['receiver_staff_id'] == current_user_staff_id and not msg.get('read', False):
+            if selected_recipient_staff_id and (msg['sender_staff_id'] == selected_recipient_staff_id):
+                msg['read'] = True
+            elif not selected_recipient_staff_id: # If no specific chat selected, but on chat page
+                 msg['read'] = True # Mark all as read when user enters chat page
+    save_data(chat_messages, CHAT_MESSAGES_FILE) # Save the read status updates
 
-                if delete_bene_submitted:
-                    del st.session_state.beneficiaries[bene_to_modify]
-                    save_data(st.session_state.beneficiaries, BENEFICIARIES_FILE)
-                    st.warning(f"Beneficiary '{bene_to_modify}' deleted.")
-                    st.rerun()
 
-# Manage HR Policies (Admin)
-def admin_manage_hr_policies():
-    st.title("📜 Admin: Manage HR Policies")
+# --- View Payslip (Staff) ---
+def view_payslip_page():
+    st.header("View Your Payslips")
+    current_user_staff_id = st.session_state.current_user['profile']['staff_id']
+    payroll_data = load_data(PAYROLL_FILE)
 
-    st.subheader("Current HR Policies")
-    if st.session_state.hr_policies:
-        for policy_name, policy_content in st.session_state.hr_policies.items():
-            with st.expander(f"**{policy_name}**"):
-                st.write(policy_content)
+    user_payslips = [p for p in payroll_data if p['staff_id'] == current_user_staff_id]
+
+    if not user_payslips:
+        st.info("No payslips available for you yet.")
+        return
+
+    # Sort payslips by pay_date in descending order
+    user_payslips.sort(key=lambda x: x.get('pay_date', '0000-00-00'), reverse=True)
+
+    payslip_options = {f"{p['pay_period']} (Paid: {p['pay_date']})": p['payslip_id'] for p in user_payslips}
+    selected_payslip_key = st.selectbox("Select Pay Period:", [""] + list(payslip_options.keys()))
+
+    if selected_payslip_key:
+        selected_payslip_id = payslip_options[selected_payslip_key]
+        selected_payslip = next(p for p in user_payslips if p['payslip_id'] == selected_payslip_id)
+
+        st.subheader(f"Payslip for {selected_payslip['pay_period']}")
+        st.markdown(f"**Pay Date:** {selected_payslip.get('pay_date', 'N/A')}")
+        # Ensure values are numeric before formatting
+        gross_pay = float(selected_payslip.get('gross_pay', 0.0))
+        deductions = float(selected_payslip.get('deductions', 0.0))
+        net_pay = float(selected_payslip.get('net_pay', 0.0))
+
+        st.markdown(f"**Gross Pay:** NGN {gross_pay:,.2f}")
+        st.markdown(f"**Total Deductions:** NGN {deductions:,.2f}")
+        st.markdown(f"**Net Pay:** NGN {net_pay:,.2f}")
+
+        st.markdown("---")
+        st.write("*(Note: This is a simplified payslip view. A full payslip would include detailed breakdowns of earnings, taxes, and other deductions.)*")
+
+        # Add a simple bar chart for gross vs net pay
+        payslip_data = pd.DataFrame({
+            'Category': ['Gross Pay', 'Deductions', 'Net Pay'],
+            'Amount': [gross_pay, deductions, net_pay]
+        })
+        fig_payslip = px.bar(payslip_data, x='Category', y='Amount',
+                             title='Payslip Summary',
+                             color='Category',
+                             template='plotly_white')
+        st.plotly_chart(fig_payslip, use_container_width=True)
+
+
+# --- View Company Policy (Staff) ---
+def view_company_policy_page():
+    st.header("Company Policies")
+    hr_policies = load_data(HR_POLICIES_FILE)
+
+    if not hr_policies:
+        st.info("No company policies available yet.")
+        return
+
+    policy_titles = {policy['title']: policy['policy_id'] for policy in hr_policies if isinstance(policy, dict) and 'title' in policy}
+    selected_policy_title = st.selectbox("Select a policy to view:", [""] + list(policy_titles.keys()))
+
+    if selected_policy_title:
+        selected_policy_id = policy_titles[selected_policy_title]
+        selected_policy = next(p for p in hr_policies if p.get('policy_id') == selected_policy_id)
+
+        st.subheader(selected_policy['title'])
+        st.markdown(selected_policy['content'])
+        st.info(f"Last Updated: {selected_policy.get('last_updated', 'N/A')}")
+
+# --- Admin Policy Management ---
+def admin_manage_policies():
+    st.header("Manage Company Policies (Admin/HR)")
+    hr_policies = load_data(HR_POLICIES_FILE)
+
+    st.subheader("Existing Policies")
+    if hr_policies:
+        # Filter out any non-dictionary entries before creating DataFrame
+        displayable_policies = [p for p in hr_policies if isinstance(p, dict) and 'title' in p and 'last_updated' in p]
+        if displayable_policies:
+            df_policies = pd.DataFrame(displayable_policies)
+            st.dataframe(df_policies[['title', 'last_updated']])
+        else:
+            st.info("No valid policies to display.")
     else:
-        st.info("No HR policies defined yet.")
+        st.info("No policies have been added yet.")
 
-    st.markdown("---")
     st.subheader("Add New Policy")
-    with st.form("add_policy_form", clear_on_submit=True):
-        new_policy_name = st.text_input("Policy Title")
-        new_policy_content = st.text_area("Policy Content", height=200)
-        
+    with st.form("add_policy_form"):
+        new_policy_title = st.text_input("Policy Title")
+        new_policy_content = st.text_area("Policy Content", height=300)
         add_policy_submitted = st.form_submit_button("Add Policy")
 
         if add_policy_submitted:
-            if not new_policy_name or not new_policy_content:
-                st.error("Please fill in both policy title and content.")
-            elif new_policy_name in st.session_state.hr_policies:
-                st.error("Policy with this title already exists.")
+            if new_policy_title and new_policy_content:
+                if any(p.get('title', '').lower() == new_policy_title.lower() for p in hr_policies if isinstance(p, dict)):
+                    st.error("A policy with this title already exists.")
+                else:
+                    new_policy = {
+                        "policy_id": str(uuid.uuid4()),
+                        "title": new_policy_title,
+                        "content": new_policy_content,
+                        "last_updated": datetime.now().isoformat().split('T')[0]
+                    }
+                    hr_policies.append(new_policy)
+                    save_data(hr_policies, HR_POLICIES_FILE)
+                    st.success("Policy added successfully!")
+                    st.rerun()
             else:
-                st.session_state.hr_policies[new_policy_name] = new_policy_content
-                save_data(st.session_state.hr_policies, HR_POLICIES_FILE)
-                st.success(f"Policy '{new_policy_name}' added successfully!")
-                st.rerun()
+                st.error("Please fill in both title and content.")
 
-    st.markdown("---")
-    st.subheader("Edit / Delete Policy")
-    policy_to_modify = st.selectbox("Select Policy to Edit/Delete", [""] + list(st.session_state.hr_policies.keys()), key="select_policy_to_modify")
-    
-    if policy_to_modify:
-        selected_policy_content = st.session_state.hr_policies.get(policy_to_modify, "")
-        with st.form("edit_delete_policy_form", clear_on_submit=True):
-            st.write(f"Editing Policy: **{policy_to_modify}**")
+    st.subheader("Edit/Delete Policy")
+    if hr_policies:
+        # Filter for valid policies to present in selectbox
+        valid_policy_titles = [p['title'] for p in hr_policies if isinstance(p, dict) and 'title' in p]
+        policy_to_edit_delete = st.selectbox("Select Policy by Title", [""] + valid_policy_titles)
+        if policy_to_edit_delete:
+            selected_policy = next((p for p in hr_policies if p.get('title') == policy_to_edit_delete), None)
+            if selected_policy:
+                policy_index = hr_policies.index(selected_policy)
+
+                with st.form("edit_policy_form"):
+                    edited_policy_title = st.text_input("Policy Title", value=selected_policy['title'], disabled=True) # Title usually not editable after creation
+                    edited_policy_content = st.text_area("Policy Content", value=selected_policy['content'], height=300)
+
+                    col_edit, col_delete = st.columns(2)
+                    with col_edit:
+                        edit_policy_submitted = st.form_submit_button("Update Policy")
+                    with col_delete:
+                        delete_policy_submitted = st.form_submit_button("Delete Policy")
+
+                    if edit_policy_submitted:
+                        hr_policies[policy_index]['content'] = edited_policy_content
+                        hr_policies[policy_index]['last_updated'] = datetime.now().isoformat().split('T')[0]
+                        save_data(hr_policies, HR_POLICIES_FILE)
+                        st.success("Policy updated successfully!")
+                        st.rerun()
+
+                    if delete_policy_submitted:
+                        del hr_policies[policy_index]
+                        save_data(hr_policies, HR_POLICIES_FILE)
+                        st.success("Policy deleted successfully!")
+                        st.rerun()
+            else:
+                st.warning("Selected policy not found or is malformed.")
+    else:
+        st.info("No policies to edit or delete.")
+
+# --- Admin Disciplinary Records Management ---
+def admin_manage_disciplinary_records():
+    st.header("Manage Disciplinary Records (HR/Admin)")
+    disciplinary_records = load_data(DISCIPLINARY_RECORDS_FILE)
+    users = load_data(USERS_FILE)
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in users}
+
+    st.subheader("Existing Disciplinary Records")
+    if disciplinary_records:
+        df_records = pd.DataFrame(disciplinary_records)
+        df_records['Employee Name'] = df_records['staff_id'].map(staff_id_to_name)
+        st.dataframe(df_records[['Employee Name', 'staff_id', 'incident_date', 'incident_type', 'action_taken', 'status']])
+    else:
+        st.info("No disciplinary records found.")
+
+    st.subheader("Add New Disciplinary Record")
+    with st.form("add_disciplinary_record_form"):
+        # Select employee from existing users
+        employee_options = {user['profile']['name']: user['profile']['staff_id'] for user in users if user['role'] == 'staff'}
+        selected_employee_name = st.selectbox("Select Employee:", [""] + list(employee_options.keys()))
+        selected_staff_id = employee_options.get(selected_employee_name)
+
+        incident_date = st.date_input("Incident Date", value=datetime.now().date())
+        incident_type = st.text_input("Incident Type (e.g., Lateness, Misconduct, Policy Violation)")
+        description = st.text_area("Description of Incident")
+        action_taken = st.text_area("Action Taken (e.g., Verbal Warning, Written Warning, Suspension)")
+        status = st.selectbox("Status", ["Open", "Closed", "Under Review"])
+        add_record_submitted = st.form_submit_button("Add Record")
+
+        if add_record_submitted:
+            if selected_staff_id and incident_type and description and action_taken:
+                new_record = {
+                    "record_id": str(uuid.uuid4()),
+                    "staff_id": selected_staff_id,
+                    "incident_date": incident_date.isoformat(),
+                    "incident_type": incident_type,
+                    "description": description,
+                    "action_taken": action_taken,
+                    "status": status,
+                    "recorded_by": st.session_state.current_user['profile']['name'],
+                    "recorded_date": datetime.now().isoformat()
+                }
+                disciplinary_records.append(new_record)
+                save_data(disciplinary_records, DISCIPLINARY_RECORDS_FILE)
+                st.success("Disciplinary record added successfully!")
+                st.rerun()
+            else:
+                st.error("Please fill in all required fields.")
+
+    st.subheader("Edit/Close Disciplinary Record")
+    if disciplinary_records:
+        record_options = {f"{staff_id_to_name.get(r['staff_id'], 'Unknown')} - {r['incident_type']} ({r['incident_date']})": r['record_id'] for r in disciplinary_records}
+        selected_record_key = st.selectbox("Select Record to Edit/Close:", [""] + list(record_options.keys()))
+
+        if selected_record_key:
+            selected_record_id = record_options[selected_record_key]
+            selected_record = next(r for r in disciplinary_records if r['record_id'] == selected_record_id)
+            record_index = disciplinary_records.index(selected_record)
+
+            with st.form("edit_disciplinary_record_form"):
+                st.write(f"**Employee:** {staff_id_to_name.get(selected_record['staff_id'])}")
+                edited_incident_date = st.date_input("Incident Date", value=date.fromisoformat(selected_record['incident_date']))
+                edited_incident_type = st.text_input("Incident Type", value=selected_record['incident_type'])
+                edited_description = st.text_area("Description of Incident", value=selected_record['description'])
+                edited_action_taken = st.text_area("Action Taken", value=selected_record['action_taken'])
+                edited_status = st.selectbox("Status", ["Open", "Closed", "Under Review"], index=["Open", "Closed", "Under Review"].index(selected_record['status']))
+
+                col_edit, col_delete = st.columns(2)
+                with col_edit:
+                    edit_record_submitted = st.form_submit_button("Update Record")
+                with col_delete:
+                    delete_record_submitted = st.form_submit_button("Delete Record")
+
+                if edit_record_submitted:
+                    disciplinary_records[record_index]['incident_date'] = edited_incident_date.isoformat()
+                    disciplinary_records[record_index]['incident_type'] = edited_incident_type
+                    disciplinary_records[record_index]['description'] = edited_description
+                    disciplinary_records[record_index]['action_taken'] = edited_action_taken
+                    disciplinary_records[record_index]['status'] = edited_status
+                    save_data(disciplinary_records, DISCIPLINARY_RECORDS_FILE)
+                    st.success("Disciplinary record updated successfully!")
+                    st.rerun()
+
+                if delete_record_submitted:
+                    del disciplinary_records[record_index]
+                    save_data(disciplinary_records, DISCIPLINARY_RECORDS_FILE)
+                    st.success("Disciplinary record deleted successfully!")
+                    st.rerun()
+    else:
+        st.info("No records to edit or delete.")
+
+# --- Time Attendance Functions (New) ---
+def record_attendance():
+    st.header("Time Attendance")
+    current_user_staff_id = st.session_state.current_user['profile']['staff_id']
+    attendance_records = load_data(ATTENDANCE_RECORDS_FILE)
+    today = date.today().isoformat()
+
+    # Find today's record for the current user
+    today_record = next((rec for rec in attendance_records if rec['staff_id'] == current_user_staff_id and rec['date'] == today), None)
+
+    st.subheader("Clock In/Out")
+
+    if today_record and today_record.get('clock_in_time') and not today_record.get('clock_out_time'):
+        # Ensure clock_in_time is not None before formatting
+        clock_in_display = datetime.fromisoformat(today_record['clock_in_time']).strftime('%H:%M:%S') if today_record['clock_in_time'] else 'N/A'
+        st.info(f"You are currently clocked in since {clock_in_display}.")
+        if st.button("Clock Out"):
+            clock_out_time = datetime.now().isoformat()
+            today_record['clock_out_time'] = clock_out_time
             
-            edit_policy_content = st.text_area("Policy Content", value=selected_policy_content, height=200)
+            # Calculate duration
+            in_time = datetime.fromisoformat(today_record['clock_in_time'])
+            out_time = datetime.fromisoformat(clock_out_time)
+            duration = out_time - in_time
+            today_record['duration_hours'] = round(duration.total_seconds() / 3600, 2) # Duration in hours
 
-            col_edit_del_policy = st.columns(2)
-            with col_edit_del_policy[0]:
-                edit_policy_submitted = st.form_submit_button("Update Policy")
-            with col_edit_del_policy[1]:
-                delete_policy_submitted = st.form_submit_button("Delete Policy")
+            save_data(attendance_records, ATTENDANCE_RECORDS_FILE)
+            st.success(f"Clocked out successfully at {datetime.fromisoformat(clock_out_time).strftime('%H:%M:%S')}! Worked for {today_record['duration_hours']} hours.")
+            st.rerun()
+    else:
+        if st.button("Clock In"):
+            new_record = {
+                "record_id": str(uuid.uuid4()),
+                "staff_id": current_user_staff_id,
+                "date": today,
+                "clock_in_time": datetime.now().isoformat(),
+                "clock_out_time": None,
+                "duration_hours": 0.0
+            }
+            attendance_records.append(new_record)
+            save_data(attendance_records, ATTENDANCE_RECORDS_FILE)
+            st.success(f"Clocked in successfully at {datetime.now().strftime('%H:%M:%S')}!")
+            st.rerun()
+        if today_record and today_record.get('clock_out_time'):
+            # Ensure clock_out_time is not None before formatting
+            clock_out_display = datetime.fromisoformat(today_record['clock_out_time']).strftime('%H:%M:%S') if today_record['clock_out_time'] else 'N/A'
+            st.info(f"You have already clocked out today. Last clocked out at {clock_out_display}. Total hours: {today_record['duration_hours']} hours.")
+        elif today_record and not today_record.get('clock_in_time'): # Case where record exists but clock_in_time is somehow missing
+            st.warning("Your attendance record for today seems incomplete. Please clock in.")
 
-            if edit_policy_submitted:
-                st.session_state.hr_policies[policy_to_modify] = edit_policy_content
-                save_data(st.session_state.hr_policies, HR_POLICIES_FILE)
-                st.success(f"Policy '{policy_to_modify}' updated successfully!")
-                st.rerun()
 
-            if delete_policy_submitted:
-                del st.session_state.hr_policies[policy_to_modify]
-                save_data(st.session_state.hr_policies, HR_POLICIES_FILE)
-                st.warning(f"Policy '{policy_to_modify}' deleted.")
-                st.rerun()
+    st.subheader("Your Attendance History")
+    user_attendance = [rec for rec in attendance_records if rec['staff_id'] == current_user_staff_id]
+    if user_attendance:
+        df_attendance = pd.DataFrame(user_attendance)
+        df_attendance['date'] = pd.to_datetime(df_attendance['date']).dt.date # Convert to date object for display
+        df_attendance['clock_in_time_display'] = df_attendance['clock_in_time'].apply(lambda x: datetime.fromisoformat(x).strftime('%H:%M:%S') if x else 'N/A')
+        df_attendance['clock_out_time_display'] = df_attendance['clock_out_time'].apply(lambda x: datetime.fromisoformat(x).strftime('%H:%M:%S') if x else 'N/A')
+        
+        st.dataframe(df_attendance[['date', 'clock_in_time_display', 'clock_out_time_display', 'duration_hours']].sort_values(by='date', ascending=False), use_container_width=True)
+    else:
+        st.info("No attendance records found for you.")
+
+def admin_manage_attendance():
+    st.header("Manage Attendance Records (Admin/HR)")
+    attendance_records = load_data(ATTENDANCE_RECORDS_FILE)
+    users = load_data(USERS_FILE)
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in users}
+
+    if not attendance_records:
+        st.info("No attendance records found.")
+        return
+
+    df_attendance = pd.DataFrame(attendance_records)
+    df_attendance['Employee Name'] = df_attendance['staff_id'].map(staff_id_to_name)
+    df_attendance['date'] = pd.to_datetime(df_attendance['date']).dt.date
+
+    st.subheader("Filter Attendance Records")
+    all_staff_ids = sorted(list(staff_id_to_name.keys()))
+    selected_staff_id = st.selectbox("Filter by Employee:", ["All"] + all_staff_ids, format_func=lambda x: staff_id_to_name.get(x, "All Employees"))
+
+    col_start, col_end = st.columns(2)
+    with col_start:
+        start_date_filter = st.date_input("Start Date", value=df_attendance['date'].min() if not df_attendance.empty else datetime.now().date() - timedelta(days=30))
+    with col_end:
+        end_date_filter = st.date_input("End Date", value=df_attendance['date'].max() if not df_attendance.empty else datetime.now().date())
+
+    filtered_df = df_attendance.copy()
+    if selected_staff_id != "All":
+        filtered_df = filtered_df[filtered_df['staff_id'] == selected_staff_id]
+    
+    filtered_df = filtered_df[(filtered_df['date'] >= start_date_filter) & (filtered_df['date'] <= end_date_filter)]
+
+    st.subheader("Filtered Attendance Records")
+    if not filtered_df.empty:
+        filtered_df['clock_in_time_display'] = filtered_df['clock_in_time'].apply(lambda x: datetime.fromisoformat(x).strftime('%H:%M:%S') if x else 'N/A')
+        filtered_df['clock_out_time_display'] = filtered_df['clock_out_time'].apply(lambda x: datetime.fromisoformat(x).strftime('%H:%M:%S') if x else 'N/A')
+        
+        st.dataframe(filtered_df[['Employee Name', 'staff_id', 'date', 'clock_in_time_display', 'clock_out_time_display', 'duration_hours']].sort_values(by='date', ascending=False), use_container_width=True)
+
+        total_hours = filtered_df['duration_hours'].sum()
+        st.markdown(f"**Total Hours Worked in Filtered Period:** {total_hours:.2f} hours")
+
+        st.subheader("Attendance Statistics")
+        # Bar chart for total hours worked per employee in the filtered period
+        hours_by_employee = filtered_df.groupby('Employee Name')['duration_hours'].sum().reset_index()
+        fig_hours = px.bar(hours_by_employee, x='Employee Name', y='duration_hours',
+                           title='Total Hours Worked by Employee (Filtered Period)',
+                           labels={'duration_hours': 'Total Hours'},
+                           color='Employee Name',
+                           template='plotly_white')
+        st.plotly_chart(fig_hours, use_container_width=True)
+
+        # Line chart for daily average hours (if multiple days selected)
+        if len(filtered_df['date'].unique()) > 1:
+            daily_avg_hours = filtered_df.groupby('date')['duration_hours'].mean().reset_index()
+            fig_daily_avg = px.line(daily_avg_hours, x='date', y='duration_hours',
+                                    title='Average Daily Hours Worked',
+                                    labels={'duration_hours': 'Average Hours'},
+                                    template='plotly_white')
+            st.plotly_chart(fig_daily_avg, use_container_width=True)
+
+    else:
+        st.info("No records match the selected filters.")
+
+# --- Profile Page (New) ---
+def view_profile_page():
+    st.header("My Profile")
+    current_user = st.session_state.current_user
+    current_user_profile = current_user['profile']
+    users = load_data(USERS_FILE)
+
+    st.subheader("Personal Information")
+    st.write(f"**Full Name:** {current_user_profile.get('name', 'N/A')}")
+    st.write(f"**Staff ID:** {current_user_profile.get('staff_id', 'N/A')}")
+    st.write(f"**Username:** {current_user.get('username', 'N/A')}")
+    st.write(f"**Role:** {current_user.get('role', 'N/A').capitalize()}")
+    st.write(f"**Date of Birth:** {current_user_profile.get('date_of_birth', 'N/A')}")
+    st.write(f"**Gender:** {current_user_profile.get('gender', 'N/A')}")
+
+    st.subheader("Employment Details")
+    st.write(f"**Department:** {current_user_profile.get('department', 'N/A')}")
+    st.write(f"**Grade Level:** {current_user_profile.get('grade_level', 'N/A')}")
+    st.write(f"**Work Anniversary:** {current_user_profile.get('work_anniversary', 'N/A')}")
+    st.write(f"**Education Background:** {current_user_profile.get('education_background', 'N/A')}")
+    st.write(f"**Professional Experience:** {current_user_profile.get('professional_experience', 'N/A')}")
+
+    st.subheader("Contact Information")
+    st.write(f"**Email Address:** {current_user_profile.get('email_address', 'N/A')}")
+    st.write(f"**Phone Number:** {current_user_profile.get('phone_number', 'N/A')}")
+    st.write(f"**Address:** {current_user_profile.get('address', 'N/A')}")
+
+    st.subheader("Training Attended")
+    if current_user_profile.get('training_attended'):
+        for i, training in enumerate(current_user_profile['training_attended']):
+            st.write(f"- {training}")
+    else:
+        st.info("No training records found.")
+
+    st.subheader("Update Your Profile")
+    st.info("You can update your contact information and add training records here.")
+
+    with st.form("update_profile_form"):
+        # Editable fields
+        updated_phone_number = st.text_input("Phone Number", value=current_user_profile.get('phone_number', ''))
+        updated_address = st.text_area("Address", value=current_user_profile.get('address', ''))
+        
+        # Add new training
+        new_training_entry = st.text_input("Add New Training Attended (e.g., 'Project Management Certification, 2023')")
+        
+        submit_update = st.form_submit_button("Update Profile")
+
+        if submit_update:
+            # Find the user in the main users list and update their profile
+            user_found = False
+            for i, user in enumerate(users):
+                if user.get('username') == current_user.get('username'):
+                    users[i]['profile']['phone_number'] = updated_phone_number
+                    users[i]['profile']['address'] = updated_address
+                    if new_training_entry and new_training_entry not in users[i]['profile'].get('training_attended', []):
+                        if 'training_attended' not in users[i]['profile'] or users[i]['profile']['training_attended'] is None:
+                            users[i]['profile']['training_attended'] = []
+                        users[i]['profile']['training_attended'].append(new_training_entry)
+                    st.session_state.current_user['profile'] = users[i]['profile'] # Update session state
+                    save_data(users, USERS_FILE)
+                    user_found = True
+                    st.success("Profile updated successfully!")
+                    st.rerun()
+                    break
+            if not user_found:
+                st.error("Could not find your user record to update. Please contact support.")
 
 
 # --- Main Application Logic ---
 def main():
-    setup_initial_data() # Ensure initial data is set up
+    setup_initial_data()
 
-    if not st.session_state.logged_in:
-        login_form()
+    # Initialize session state for page navigation and authentication
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = "login"
+    if "current_user" not in st.session_state:
+        st.session_state.current_user = None
+
+    display_logo_and_title()
+
+    if st.session_state.current_user is None:
+        # User is not logged in
+        st.sidebar.title("Login")
+        username = st.sidebar.text_input("Username (Email)")
+        password = st.sidebar.text_input("Password", type="password")
+        if st.sidebar.button("Login"):
+            user = authenticate_user(username, password)
+            if user:
+                st.session_state.current_user = user
+                st.session_state.current_page = "dashboard"
+                st.success("Logged in successfully!")
+                st.rerun()
+            else:
+                st.sidebar.error("Invalid username or password.")
+        # Option to register (for demo purposes, could be removed in production)
+        if st.sidebar.button("Register New Account"):
+            st.session_state.current_page = "register"
+            st.rerun()
+        if st.session_state.current_page == "register":
+            register_new_user()
+        st.info("Please log in to access the portal.") # This line should be here, inside the 'if st.session_state.current_user is None' block
+        st.session_state.current_page = "login" # Ensure redirect to login if not logged in
     else:
-        display_sidebar()
-        # Main content area based on current_page
+        # User is logged in
+        st.sidebar.title("Navigation")
+        # Determine user role
+        user_role = st.session_state.current_user.get('role', 'staff')
+        user_profile = st.session_state.current_user.get('profile', {})
+        user_department = user_profile.get('department')
+        user_grade = user_profile.get('grade_level')
+
+        menu_options = {
+            "Dashboard": "dashboard",
+            "My Profile": "my_profile", # New profile page option
+            "Request Leave": "request_leave",
+            "Request OPEX/CAPEX": "request_opex_capex",
+            "Set Performance Goals": "set_performance_goals",
+            "Submit Self-Appraisal": "submit_self_appraisal",
+            "Time Attendance": "time_attendance", # New time attendance option
+            "Chat": "chat", # New chat option
+            "View Payslip": "view_payslip", # New payslip option
+            "View Company Policy": "view_company_policy", # New policy option
+        }
+
+        # Add admin-specific menu options
+        if user_role == "admin":
+            menu_options["Manage Users"] = "admin_manage_users"
+            menu_options["Manage Leave (HR)"] = "admin_manage_leave"
+            menu_options["Manage OPEX/CAPEX Approvals"] = "manage_opex_capex_approvals"
+            menu_options["View All Performance Goals"] = "admin_view_performance_goals"
+            menu_options["Manage Appraisals"] = "admin_manage_appraisals" # New admin appraisal management
+            menu_options["Manage HR Policies"] = "admin_manage_policies" # New admin policy management
+            menu_options["Manage Disciplinary Records"] = "admin_manage_disciplinary_records" # New disciplinary records
+            menu_options["Manage Attendance"] = "admin_manage_attendance" # New admin attendance management
+
+        # Add approver-specific menu option for OPEX/CAPEX
+        is_approver = False
+        for role_info in APPROVAL_CHAIN:
+            if (role_info['department'] == user_department and
+                    role_info['grade_level'] == user_grade):
+                is_approver = True
+                break
+        if is_approver and user_role != "admin": # Non-admin approvers
+            menu_options["Manage OPEX/CAPEX Approvals"] = "manage_opex_capex_approvals"
+        
+        # HR Manager also manages leave
+        if user_department == "HR" and user_grade == "Manager" and user_role != "admin":
+            menu_options["Manage Leave (HR)"] = "admin_manage_leave"
+            menu_options["Manage Appraisals"] = "admin_manage_appraisals"
+            menu_options["Manage HR Policies"] = "admin_manage_policies"
+            menu_options["Manage Disciplinary Records"] = "admin_manage_disciplinary_records"
+            menu_options["Manage Attendance"] = "admin_manage_attendance"
+
+        # MD also manages appraisals
+        if user_grade == "MD" and user_role != "admin":
+            menu_options["Manage Appraisals"] = "admin_manage_appraisals"
+
+        selected_page_name = st.sidebar.radio(
+            "Go to",
+            list(menu_options.keys()),
+            index=list(menu_options.keys()).index(next(k for k, v in menu_options.items() if v == st.session_state.current_page) if st.session_state.current_page in menu_options.values() else "Dashboard")
+        )
+        st.session_state.current_page = menu_options[selected_page_name]
+
+        st.sidebar.markdown("---")
+        st.sidebar.write(f"Logged in as: {st.session_state.current_user['profile']['name']}")
+        st.sidebar.write(f"Role: {st.session_state.current_user['role'].capitalize()}")
+        if st.sidebar.button("Logout"):
+            st.session_state.current_user = None
+            st.session_state.current_page = "login"
+            st.success("Logged out successfully.")
+            st.rerun()
+
+        # --- Page Routing ---
         if st.session_state.current_page == "dashboard":
             display_dashboard()
         elif st.session_state.current_page == "my_profile":
-            display_my_profile()
-        elif st.session_state.current_page == "leave_request":
-            leave_request_form()
-        elif st.session_state.current_page == "view_my_leave":
-            view_my_leave_requests()
-        elif st.session_state.current_page == "opex_capex_form":
-            opex_capex_form()
-        elif st.session_state.current_page == "view_my_opex_capex":
-            view_my_opex_capex_requests()
-        elif st.session_state.current_page == "performance_goal_setting":
-            performance_goal_setting()
-        elif st.session_state.current_page == "view_my_goals":
-            view_my_goals()
-        elif st.session_state.current_page == "self_appraisal":
-            self_appraisal_form()
-        elif st.session_state.current_page == "view_my_appraisals":
-            view_my_appraisals()
-        elif st.session_state.current_page == "my_payslips":
-            my_payslips()
-        elif st.session_state.current_page == "hr_policies":
-            hr_policies()
-        # Admin functions - check role before rendering
-        elif st.session_state.current_page == "manage_users":
-            if st.session_state.current_user and st.session_state.current_user['role'] == 'admin':
-                admin_manage_users()
+            view_profile_page()
+        elif st.session_state.current_page == "request_leave":
+            request_leave()
+        elif st.session_state.current_page == "request_opex_capex":
+            request_opex_capex()
+        elif st.session_state.current_page == "set_performance_goals":
+            manage_performance_goals()
+        elif st.session_state.current_page == "submit_self_appraisal":
+            submit_self_appraisal()
+        elif st.session_state.current_page == "time_attendance":
+            record_attendance()
+        elif st.session_state.current_page == "chat":
+            chat_page()
+        elif st.session_state.current_page == "view_payslip":
+            view_payslip_page()
+        elif st.session_state.current_page == "view_company_policy":
+            view_company_policy_page()
+        # Admin/Approver pages
+        elif st.session_state.current_page == "admin_manage_users" and user_role == "admin":
+            admin_manage_users()
+        elif st.session_state.current_page == "admin_manage_leave" and (user_role == "admin" or (user_department == "HR" and user_grade == "Manager")):
+            admin_manage_leave()
+        elif st.session_state.current_page == "manage_opex_capex_approvals" and (user_role == "admin" or is_approver):
+            admin_manage_opex_capex_approvals()
+        elif st.session_state.current_page == "admin_view_performance_goals" and user_role == "admin":
+            admin_view_performance_goals()
+        elif st.session_state.current_page == "admin_manage_appraisals" and (user_role == "admin" or (user_department == "HR" and user_grade == "Manager") or user_grade == "MD"):
+            admin_manage_appraisals()
+        elif st.session_state.current_page == "admin_manage_policies" and (user_role == "admin" or (user_department == "HR" and user_grade == "Manager")):
+            admin_manage_policies()
+        elif st.session_state.current_page == "admin_manage_disciplinary_records" and (user_role == "admin" or (user_department == "HR" and user_grade == "Manager")):
+            admin_manage_disciplinary_records()
+        elif st.session_state.current_page == "admin_manage_attendance" and (user_role == "admin" or (user_department == "HR" and user_grade == "Manager")):
+            admin_manage_attendance()
+        else:
+            st.error("Access Denied: Page not found or you do not have permission to view this page.")
+            st.session_state.current_page = "dashboard" # Redirect to dashboard
+            st.rerun()
+
+
+def register_new_user():
+    st.header("Register New Account")
+    st.info("Please note: New registrations default to 'staff' role. Admin approval might be required for full access in a real-world scenario.")
+    
+    users = load_data(USERS_FILE)
+
+    with st.form("register_form"):
+        new_username = st.text_input("Choose a Username (Email)")
+        new_password = st.text_input("Create Password", type="password")
+        confirm_password = st.text_input("Confirm Password", type="password")
+
+        st.markdown("---")
+        st.subheader("Your Profile Details")
+        new_name = st.text_input("Full Name")
+        new_staff_id = st.text_input("Staff ID (e.g., POL/2024/XXX)")
+        new_dob = st.date_input("Date of Birth", value=date(2000, 1, 1))
+        new_gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+        new_grade_level = st.text_input("Grade Level (e.g., Officer, Manager)")
+        new_department = st.text_input("Department")
+        new_education = st.text_area("Education Background")
+        new_experience = st.text_area("Professional Experience")
+        new_address = st.text_area("Residential Address")
+        new_phone = st.text_input("Phone Number")
+        new_email = st.text_input("Email Address (should match username)")
+        new_work_anniversary = st.date_input("Work Anniversary (Optional)", value=date(datetime.now().year, 1, 1))
+
+        register_submitted = st.form_submit_button("Register")
+
+        if register_submitted:
+            if not (new_username and new_password and confirm_password and new_name and new_staff_id and new_department):
+                st.error("Please fill in all required fields (Username, Password, Name, Staff ID, Department).")
+            elif new_password != confirm_password:
+                st.error("Passwords do not match.")
+            elif any(u['username'] == new_username for u in users):
+                st.error("Username already exists. Please choose another.")
+            elif any(u.get('profile', {}).get('staff_id') == new_staff_id for u in users):
+                st.error("Staff ID already exists. Please use a unique Staff ID.")
             else:
-                st.error("Access Denied: You do not have permission to view this page.")
-                st.session_state.current_page = "dashboard"
+                new_user_data = {
+                    "username": new_username,
+                    "password": pbkdf2_sha256.hash(new_password),
+                    "role": "staff", # Default role for new registrations
+                    "profile": {
+                        "name": new_name,
+                        "staff_id": new_staff_id,
+                        "date_of_birth": new_dob.isoformat(),
+                        "gender": new_gender,
+                        "grade_level": new_grade_level,
+                        "department": new_department,
+                        "education_background": new_education,
+                        "professional_experience": new_experience,
+                        "address": new_address,
+                        "phone_number": new_phone,
+                        "email_address": new_email,
+                        "training_attended": [],
+                        "work_anniversary": new_work_anniversary.isoformat()
+                    }
+                }
+                users.append(new_user_data)
+                save_data(users, USERS_FILE)
+                st.success("Account registered successfully! You can now log in.")
+                st.session_state.current_page = "login"
                 st.rerun()
-        elif st.session_state.current_page == "upload_payroll":
-            if st.session_state.current_user and st.session_state.current_user['role'] == 'admin':
-                admin_upload_payroll()
-            else:
-                st.error("Access Denied: You do not have permission to view this page.")
-                st.session_state.current_page = "dashboard"
-                st.rerun()
-        elif st.session_state.current_page == "manage_opex_capex_approvals":
-            # Any approver in the chain (including admin) can access this
-            current_user_profile = st.session_state.current_user.get('profile', {})
-            current_user_department = current_user_profile.get('department')
-            current_user_grade = current_user_profile.get('grade_level')
-            
-            is_eligible_approver = False
-            if st.session_state.current_user['role'] == 'admin':
-                is_eligible_approver = True
-            else:
-                for approver_role_info in APPROVAL_CHAIN:
-                    if (current_user_department == approver_role_info['department'] and
-                            current_user_grade == approver_role_info['grade_level']):
-                        is_eligible_approver = True
-                        break
-            
-            if is_eligible_approver:
-                manage_opex_capex_approvals()
-            else:
-                st.error("Access Denied: You do not have permission to view this page.")
-                st.session_state.current_page = "dashboard"
-                st.rerun()
-        elif st.session_state.current_page == "manage_leave_approvals": # NEWLY ADDED
-            if st.session_state.current_user and st.session_state.current_user['role'] == 'admin':
-                admin_manage_leave_approvals()
-            else:
-                st.error("Access Denied: You do not have permission to view this page.")
-                st.session_state.current_page = "dashboard"
-                st.rerun()
-        elif st.session_state.current_page == "manage_beneficiaries":
-            if st.session_state.current_user and st.session_state.current_user['role'] == 'admin':
-                admin_manage_beneficiaries()
-            else:
-                st.error("Access Denied: You do not have permission to view this page.")
-                st.session_state.current_page = "dashboard"
-                st.rerun()
-        elif st.session_state.current_page == "manage_hr_policies":
-            if st.session_state.current_user and st.session_state.current_user['role'] == 'admin':
-                admin_manage_hr_policies()
-            else:
-                st.error("Access Denied: You do not have permission to view this page.")
-                st.session_state.current_page = "dashboard"
-                st.rerun()
+    st.markdown("---")
+    if st.button("Back to Login"):
+        st.session_state.current_page = "login"
+        st.rerun()
 
 if __name__ == "__main__":
     main()
