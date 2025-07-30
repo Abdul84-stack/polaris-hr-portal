@@ -31,6 +31,7 @@ HR_POLICIES_FILE = os.path.join(DATA_DIR, "hr_policies.json")
 CHAT_MESSAGES_FILE = os.path.join(DATA_DIR, "chat_messages.json") # NEW: Chat messages file
 ATTENDANCE_RECORDS_FILE = os.path.join(DATA_DIR, "attendance_records.json") # NEW: Attendance records file
 DISCIPLINARY_RECORDS_FILE = os.path.join(DATA_DIR, "disciplinary_records.json") # NEW: Disciplinary records file
+DAILY_TASKS_FILE = os.path.join(DATA_DIR, "daily_tasks.json") # NEW: Daily tasks file
 
 
 # Ensure data directory exists
@@ -96,7 +97,7 @@ class DateEncoder(json.JSONEncoder):
         return super().default(obj)
 
 def load_data(filename, default_value=None):
-    if default_value is None:
+    if default_value is None: # Corrected from === to is
         default_value = []
     try:
         if os.path.exists(filename) and os.path.getsize(filename) > 0:
@@ -213,7 +214,8 @@ def load_data(filename, default_value=None):
                     for policy_entry in data:
                         if isinstance(policy_entry, str): # Handle cases where policy might be a plain string
                             st.warning(f"Found string policy entry in {filename}: '{policy_entry}'. Skipping or converting.")
-                            # You might choose to skip it, or try to convert it to a dict if it's a simple string
+                            # You might choose to skip it, or try to convert it to a dict if it follows a pattern
+                            # For now, let's assume it's a malformed entry and skip or provide a default dict
                             cleaned_data.append({
                                 "policy_id": str(uuid.uuid4()),
                                 "title": f"Malformed Policy ({str(uuid.uuid4())[:8]})",
@@ -274,7 +276,18 @@ def load_data(filename, default_value=None):
                         # --- END FIX ---
 
                         record.setdefault('duration_hours', 0.0)
-
+                # Specific handling for daily tasks - ENSURE ALL KEYS ARE PRESENT
+                elif filename == DAILY_TASKS_FILE:
+                    for task in data:
+                        task.setdefault('task_id', str(uuid.uuid4()))
+                        task.setdefault('task_details', 'No details provided.')
+                        task.setdefault('assignee_staff_id', 'N/A')
+                        task.setdefault('objective', 'No objective provided.') # Default value for objective
+                        task.setdefault('start_date', datetime.now().isoformat().split('T')[0])
+                        task.setdefault('end_date', datetime.now().isoformat().split('T')[0])
+                        task.setdefault('status', 'Not Started') # Default status
+                        task.setdefault('created_by_staff_id', 'N/A')
+                        task.setdefault('created_date', datetime.now().isoformat())
                 return data
         return default_value
     except json.JSONDecodeError:
@@ -412,7 +425,7 @@ def setup_initial_data():
                 "name": "Abdul Bolaji (Admin)",
                 "staff_id": "ADM/2024/000", # Moved staff_id here
                 "date_of_birth": "1980-01-01",
-                "gender": "Male",
+                "gender": "Male", # Corrected from Male in table
                 "grade_level": "MD", # This user can act as MD approver
                 "department": "Executive", # This user can act as MD approver, also Admin manager for the purpose of this demo
                 "education_background": "MBA, Computer Science",
@@ -749,7 +762,7 @@ def setup_initial_data():
     # Ensure other files are initialized as empty lists if they don't exist
     for filename in [LEAVE_REQUESTS_FILE, OPEX_CAPEX_REQUESTS_FILE, PERFORMANCE_GOALS_FILE,
                      SELF_APPRAISALS_FILE, BENEFICIARIES_FILE, CHAT_MESSAGES_FILE,
-                     ATTENDANCE_RECORDS_FILE, DISCIPLINARY_RECORDS_FILE]:
+                     ATTENDANCE_RECORDS_FILE, DISCIPLINARY_RECORDS_FILE, DAILY_TASKS_FILE]:
         if not os.path.exists(filename) or os.path.getsize(filename) == 0:
             save_data([], filename) # Save empty list to initialize
 
@@ -793,6 +806,7 @@ def display_logo_and_title():
     st.markdown("---")
 
 def display_dashboard():
+    # Corrected f-string syntax
     st.header(f"Welcome, {st.session_state.current_user['profile']['name']}!")
     st.write("This is your personalized HR dashboard.")
 
@@ -867,13 +881,17 @@ def display_dashboard():
         else:
             st.info("No pending leave requests for HR review at this time.")
 
-    # Display unread chat messages
-    unread_messages_count = get_unread_messages(st.session_state.current_user['profile']['staff_id'])
-    if unread_messages_count > 0: # Check if count is greater than 0
-        st.info(f"You have {unread_messages_count} unread chat messages! Go to Chat to view them.") # Removed len()
+    # Display unread chat messages with sender names
+    unread_messages_info = get_unread_messages_with_senders(st.session_state.current_user['profile']['staff_id'])
+    if unread_messages_info:
+        st.info("You have unread chat messages!")
+        for sender_name, count in unread_messages_info.items():
+            st.write(f"- {count} unread message(s) from **{sender_name}**")
         if st.button("Go to Chat"):
             st.session_state.current_page = "chat"
             st.rerun()
+    else:
+        st.info("No unread chat messages.")
 
     st.markdown("---")
     st.subheader("Company Overview Infographics")
@@ -2071,19 +2089,31 @@ def admin_manage_appraisals():
                         break
             save_data(performance_goals_data, PERFORMANCE_GOALS_FILE) # Save updated goals
 
-            appraisals[appraisal_index] = selected_appraisal
+            # Find the index of the current appraisal in the list to update it
+            try:
+                idx = next(i for i, app in enumerate(appraisals) if app['appraisal_id'] == selected_appraisal['appraisal_id'])
+                appraisals[idx] = selected_appraisal
+            except StopIteration:
+                # This case should ideally not happen if selected_appraisal was found
+                st.error("Error: Could not find appraisal to update. Please refresh.")
+                return
+
             save_data(appraisals, SELF_APPRAISALS_FILE)
             st.success("Appraisal review saved successfully!")
             st.rerun()
 
 # --- Chat Feature (Personalized) ---
-def get_unread_messages(recipient_staff_id):
+def get_unread_messages_with_senders(recipient_staff_id):
     chat_messages = load_data(CHAT_MESSAGES_FILE)
-    unread_count = 0
+    unread_info = {} # Dictionary to store sender_name: count
+    all_users = load_data(USERS_FILE)
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in all_users}
+
     for msg in chat_messages:
         if msg['receiver_staff_id'] == recipient_staff_id and not msg.get('read', False):
-            unread_count += 1
-    return unread_count
+            sender_name = staff_id_to_name.get(msg['sender_staff_id'], 'Unknown Sender')
+            unread_info[sender_name] = unread_info.get(sender_name, 0) + 1
+    return unread_info
 
 def chat_page():
     st.header("Personalized Chat")
@@ -2102,7 +2132,39 @@ def chat_page():
     # Create a mapping from staff_id to full name for display
     staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in all_users}
 
-    # Select recipient
+    # Addidas Puma's staff ID for broadcast functionality
+    addidas_puma_staff_id = None
+    for user in all_users:
+        if user.get('username') == 'addidas_puma': # Assuming username 'addidas_puma' for Addidas Puma
+            addidas_puma_staff_id = user['profile']['staff_id']
+            break
+
+    # Broadcast Message Section (only for Addidas Puma or Admin)
+    if current_user_staff_id == addidas_puma_staff_id or st.session_state.current_user['role'] == 'admin':
+        st.subheader("Send Broadcast Message (HR/Admin)")
+        broadcast_message = st.text_area("Message to all staff:", key="broadcast_input")
+        if st.button("Send Broadcast"):
+            if broadcast_message:
+                for user in all_users:
+                    if user['profile']['staff_id'] != current_user_staff_id: # Don't send to self
+                        new_chat_entry = {
+                            "message_id": str(uuid.uuid4()),
+                            "sender_staff_id": current_user_staff_id,
+                            "receiver_staff_id": user['profile']['staff_id'],
+                            "timestamp": datetime.now().isoformat(),
+                            "message": broadcast_message,
+                            "read": False
+                        }
+                        chat_messages.append(new_chat_entry)
+                save_data(chat_messages, CHAT_MESSAGES_FILE)
+                st.success("Broadcast message sent to all staff!")
+                st.rerun()
+            else:
+                st.error("Broadcast message cannot be empty.")
+        st.markdown("---")
+
+
+    # Select recipient for private chat
     recipient_options = {user['profile']['name']: user['profile']['staff_id'] for user in other_users}
     selected_recipient_name = st.selectbox("Chat with:", [""] + list(recipient_options.keys()))
 
@@ -2165,12 +2227,15 @@ def chat_page():
     # After sending a message or selecting a new chat, ensure all displayed messages are marked as read for the current user
     # This is a simple approach to mark messages as read. A more sophisticated system might involve
     # a separate 'read status' for each user or a 'mark as read' button.
+    # This block should ideally be outside the selected_recipient_name if condition to mark all received messages as read
+    # when the chat page is generally accessed.
     for msg in chat_messages:
         if msg['receiver_staff_id'] == current_user_staff_id and not msg.get('read', False):
+            # Only mark as read if the current chat is with the sender or if no specific chat is selected (general view)
             if selected_recipient_staff_id and (msg['sender_staff_id'] == selected_recipient_staff_id):
                 msg['read'] = True
-            elif not selected_recipient_staff_id: # If no specific chat selected, but on chat page
-                 msg['read'] = True # Mark all as read when user enters chat page
+            elif not selected_recipient_staff_id: # If no specific chat selected, but on chat page, mark all as read
+                 msg['read'] = True
     save_data(chat_messages, CHAT_MESSAGES_FILE) # Save the read status updates
 
 
@@ -2603,6 +2668,265 @@ def view_profile_page():
             if not user_found:
                 st.error("Could not find your user record to update. Please contact support.")
 
+# --- Daily Task Management (New Feature) ---
+def daily_task_management():
+    st.header("Daily Task Management")
+    current_user_staff_id = st.session_state.current_user['profile']['staff_id']
+    all_users = load_data(USERS_FILE)
+    tasks = load_data(DAILY_TASKS_FILE)
+
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in all_users}
+    name_to_staff_id = {user['profile']['name']: user['profile']['staff_id'] for user in all_users}
+
+    st.subheader("Add New Task")
+    with st.form("add_task_form"):
+        task_details = st.text_area("Task Details", help="Describe the task to be performed.")
+        
+        # Assignee selection
+        assignee_names = sorted([user['profile']['name'] for user in all_users])
+        selected_assignee_name = st.selectbox("Assignee", [""] + assignee_names)
+        assignee_staff_id = name_to_staff_id.get(selected_assignee_name)
+
+        objective = st.text_area("Objective", help="What is the goal or purpose of this task?")
+        start_date = st.date_input("Start Date", value=datetime.now().date())
+        end_date = st.date_input("End Date", value=datetime.now().date() + timedelta(days=7))
+        status = st.selectbox("Status", ["Not Started", "Pending", "In Progress", "Complete"])
+
+        add_task_submitted = st.form_submit_button("Add Task")
+
+        if add_task_submitted:
+            if not (task_details and assignee_staff_id and objective and start_date and end_date):
+                st.error("Please fill in all task details, select an assignee, and set dates.")
+            elif start_date > end_date:
+                st.error("End Date cannot be before Start Date.")
+            else:
+                new_task = {
+                    "task_id": str(uuid.uuid4()),
+                    "task_details": task_details,
+                    "assignee_staff_id": assignee_staff_id,
+                    "objective": objective,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "status": status,
+                    "created_by_staff_id": current_user_staff_id,
+                    "created_date": datetime.now().isoformat()
+                }
+                tasks.append(new_task)
+                save_data(tasks, DAILY_TASKS_FILE)
+                st.success("Task added successfully!")
+                st.rerun()
+
+    st.subheader("Your Assigned Tasks")
+    # Filter tasks assigned to the current user
+    user_assigned_tasks = [task for task in tasks if task['assignee_staff_id'] == current_user_staff_id]
+    
+    if user_assigned_tasks:
+        df_user_tasks = pd.DataFrame(user_assigned_tasks)
+        df_user_tasks['Assignee'] = df_user_tasks['assignee_staff_id'].map(staff_id_to_name)
+        df_user_tasks['Created By'] = df_user_tasks['created_by_staff_id'].map(staff_id_to_name)
+        
+        # Apply color formatting based on status
+        def color_status(val):
+            if val == 'Not Started':
+                return 'background-color: #D3D3D3' # Light Gray (close to black background with black text)
+            elif val == 'Pending':
+                return 'background-color: #FFCCCC' # Light Red
+            elif val == 'In Progress':
+                return 'background-color: #FFDDAA' # Light Orange
+            elif val == 'Complete':
+                return 'background-color: #CCFFCC' # Light Green
+            return ''
+
+        st.dataframe(
+            df_user_tasks[['task_details', 'Assignee', 'objective', 'start_date', 'end_date', 'status', 'Created By', 'created_date']]
+            .style.applymap(color_status, subset=['status']),
+            use_container_width=True
+        )
+
+        st.subheader("Update Task Status & Details")
+        task_options = {f"{task['task_details']} (Assigned to {staff_id_to_name.get(task['assignee_staff_id'], 'Unknown')})": task['task_id'] for task in user_assigned_tasks}
+        selected_task_key = st.selectbox("Select Task to Update:", [""] + list(task_options.keys()))
+
+        if selected_task_key:
+            selected_task_id = task_options[selected_task_key]
+            selected_task = next(task for task in tasks if task['task_id'] == selected_task_id)
+            task_index = tasks.index(selected_task)
+
+            with st.form("update_task_form"):
+                updated_task_details = st.text_area("Task Details", value=selected_task['task_details'], key=f"update_details_{selected_task_id}")
+                updated_objective = st.text_area("Objective", value=selected_task['objective'], key=f"update_objective_{selected_task_id}")
+                
+                # Convert date strings to date objects for date_input
+                current_start_date = date.fromisoformat(selected_task['start_date']) if isinstance(selected_task['start_date'], str) else date.today()
+                current_end_date = date.fromisoformat(selected_task['end_date']) if isinstance(selected_task['end_date'], str) else date.today()
+
+                updated_start_date = st.date_input("Start Date", value=current_start_date, key=f"update_start_date_{selected_task_id}")
+                updated_end_date = st.date_input("End Date", value=current_end_date, key=f"update_end_date_{selected_task_id}")
+                
+                updated_status = st.selectbox("New Status", ["Not Started", "Pending", "In Progress", "Complete"], index=["Not Started", "Pending", "In Progress", "Complete"].index(selected_task['status']), key=f"update_status_{selected_task_id}")
+                
+                col_update, col_delete = st.columns(2)
+                with col_update:
+                    update_submitted = st.form_submit_button("Update Task")
+                with col_delete:
+                    delete_submitted = st.form_submit_button("Delete Task")
+
+                if update_submitted:
+                    if updated_start_date > updated_end_date:
+                        st.error("End Date cannot be before Start Date.")
+                    else:
+                        tasks[task_index]['task_details'] = updated_task_details
+                        tasks[task_index]['objective'] = updated_objective
+                        tasks[task_index]['start_date'] = updated_start_date.isoformat()
+                        tasks[task_index]['end_date'] = updated_end_date.isoformat()
+                        tasks[task_index]['status'] = updated_status
+                        save_data(tasks, DAILY_TASKS_FILE)
+                        st.success("Task updated successfully!")
+                        st.rerun()
+
+                if delete_submitted:
+                    del tasks[task_index]
+                    save_data(tasks, DAILY_TASKS_FILE)
+                    st.success("Task deleted successfully!")
+                    st.rerun()
+    else:
+        st.info("No tasks assigned to you yet.")
+
+    st.subheader("Task Status Analytics")
+    if tasks:
+        df_all_tasks = pd.DataFrame(tasks)
+        status_counts = df_all_tasks['status'].value_counts().reset_index()
+        status_counts.columns = ['Status', 'Count']
+
+        # Define custom colors for the chart
+        status_colors = {
+            'Not Started': '#808080', # Gray for Not Started (closer to black text)
+            'Pending': '#FF0000',    # Red
+            'In Progress': '#FFA500', # Orange
+            'Complete': '#008000'    # Green
+        }
+        
+        # Map status to color
+        status_counts['color'] = status_counts['Status'].map(status_colors)
+
+        fig = px.pie(status_counts, values='Count', names='Status',
+                     title='Distribution of Task Status',
+                     color='Status',
+                     color_discrete_map=status_colors, # Apply custom colors
+                     hole=0.3)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No tasks available to generate analytics.")
+
+
+# --- Admin/HR Task Analytics (New Feature) ---
+def admin_view_task_analytics():
+    st.header("Task People Analytics (Admin/HR)")
+    all_tasks = load_data(DAILY_TASKS_FILE)
+    all_users = load_data(USERS_FILE)
+    staff_id_to_name = {user['profile']['staff_id']: user['profile']['name'] for user in all_users}
+
+    if not all_tasks:
+        st.info("No tasks have been recorded yet.")
+        return
+
+    df_tasks = pd.DataFrame(all_tasks)
+    df_tasks['Assignee Name'] = df_tasks['assignee_staff_id'].map(staff_id_to_name)
+    df_tasks['Created By Name'] = df_tasks['created_by_staff_id'].map(staff_id_to_name)
+    df_tasks['start_date'] = pd.to_datetime(df_tasks['start_date']).dt.date
+    df_tasks['end_date'] = pd.to_datetime(df_tasks['end_date']).dt.date
+    df_tasks['created_date'] = pd.to_datetime(df_tasks['created_date']).dt.date
+
+    st.subheader("Filter Tasks")
+    col_filter1, col_filter2 = st.columns(2)
+    with col_filter1:
+        selected_assignee = st.selectbox("Filter by Assignee:", ["All"] + sorted(list(staff_id_to_name.values())))
+    with col_filter2:
+        selected_status = st.selectbox("Filter by Status:", ["All", "Not Started", "Pending", "In Progress", "Complete"])
+
+    col_date_filter1, col_date_filter2 = st.columns(2)
+    with col_date_filter1:
+        min_date = df_tasks['created_date'].min() if not df_tasks.empty else date.today() - timedelta(days=30)
+        max_date = df_tasks['created_date'].max() if not df_tasks.empty else date.today()
+        start_date_filter = st.date_input("Start Date (Created)", value=min_date)
+    with col_date_filter2:
+        end_date_filter = st.date_input("End Date (Created)", value=max_date)
+
+    filtered_tasks_df = df_tasks.copy()
+
+    if selected_assignee != "All":
+        filtered_tasks_df = filtered_tasks_df[filtered_tasks_df['Assignee Name'] == selected_assignee]
+    if selected_status != "All":
+        filtered_tasks_df = filtered_tasks_df[filtered_tasks_df['status'] == selected_status]
+    
+    filtered_tasks_df = filtered_tasks_df[
+        (filtered_tasks_df['created_date'] >= start_date_filter) & 
+        (filtered_tasks_df['created_date'] <= end_date_filter)
+    ]
+
+    st.subheader("All Tasks Table (Filtered)")
+    if not filtered_tasks_df.empty:
+        # Apply color formatting based on status
+        def color_status(val):
+            if val == 'Not Started':
+                return 'background-color: #D3D3D3' # Light Gray
+            elif val == 'Pending':
+                return 'background-color: #FFCCCC' # Light Red
+            elif val == 'In Progress':
+                return 'background-color: #FFDDAA' # Light Orange
+            elif val == 'Complete':
+                return 'background-color: #CCFFCC' # Light Green
+            return ''
+
+        st.dataframe(
+            filtered_tasks_df[['task_details', 'Assignee Name', 'objective', 'start_date', 'end_date', 'status', 'Created By Name', 'created_date']]
+            .style.applymap(color_status, subset=['status']),
+            use_container_width=True
+        )
+    else:
+        st.info("No tasks match the selected filters.")
+
+    st.subheader("Task Analytics")
+    if not filtered_tasks_df.empty:
+        col_chart_task1, col_chart_task2 = st.columns(2)
+
+        # Pie Chart: Task Status Distribution
+        status_counts = filtered_tasks_df['status'].value_counts().reset_index()
+        status_counts.columns = ['Status', 'Count']
+        status_colors = {
+            'Not Started': '#808080',
+            'Pending': '#FF0000',
+            'In Progress': '#FFA500',
+            'Complete': '#008000'
+        }
+        fig_status = px.pie(status_counts, values='Count', names='Status',
+                            title='Task Status Distribution (Filtered)',
+                            color='Status',
+                            color_discrete_map=status_colors,
+                            hole=0.3)
+        col_chart_task1.plotly_chart(fig_status, use_container_width=True)
+
+        # Bar Chart: Tasks per Assignee
+        tasks_per_assignee = filtered_tasks_df['Assignee Name'].value_counts().reset_index()
+        tasks_per_assignee.columns = ['Assignee Name', 'Number of Tasks']
+        fig_assignee = px.bar(tasks_per_assignee, x='Assignee Name', y='Number of Tasks',
+                              title='Number of Tasks per Assignee (Filtered)',
+                              color='Assignee Name',
+                              template='plotly_white')
+        col_chart_task2.plotly_chart(fig_assignee, use_container_width=True)
+
+        # Bar Chart: Tasks Created by User
+        tasks_per_creator = filtered_tasks_df['Created By Name'].value_counts().reset_index()
+        tasks_per_creator.columns = ['Created By Name', 'Number of Tasks']
+        fig_creator = px.bar(tasks_per_creator, x='Created By Name', y='Number of Tasks',
+                             title='Number of Tasks Created by User (Filtered)',
+                             color='Created By Name',
+                             template='plotly_white')
+        st.plotly_chart(fig_creator, use_container_width=True)
+
+    else:
+        st.info("No data available for task analytics with current filters.")
+
 
 # --- Main Application Logic ---
 def main():
@@ -2655,6 +2979,7 @@ def main():
             "Set Performance Goals": "set_performance_goals",
             "Submit Self-Appraisal": "submit_self_appraisal",
             "Time Attendance": "time_attendance", # New time attendance option
+            "Daily Task Management": "daily_task_management", # NEW: Daily Task Management
             "Chat": "chat", # New chat option
             "View Payslip": "view_payslip", # New payslip option
             "View Company Policy": "view_company_policy", # New policy option
@@ -2670,6 +2995,7 @@ def main():
             menu_options["Manage HR Policies"] = "admin_manage_policies" # New admin policy management
             menu_options["Manage Disciplinary Records"] = "admin_manage_disciplinary_records" # New disciplinary records
             menu_options["Manage Attendance"] = "admin_manage_attendance" # New admin attendance management
+            menu_options["Task People Analytics"] = "admin_view_task_analytics" # NEW: Admin/HR Task Analytics
 
         # Add approver-specific menu option for OPEX/CAPEX
         is_approver = False
@@ -2688,6 +3014,7 @@ def main():
             menu_options["Manage HR Policies"] = "admin_manage_policies"
             menu_options["Manage Disciplinary Records"] = "admin_manage_disciplinary_records"
             menu_options["Manage Attendance"] = "admin_manage_attendance"
+            menu_options["Task People Analytics"] = "admin_view_task_analytics" # NEW: Admin/HR Task Analytics
 
         # MD also manages appraisals
         if user_grade == "MD" and user_role != "admin":
@@ -2724,6 +3051,8 @@ def main():
             submit_self_appraisal()
         elif st.session_state.current_page == "time_attendance":
             record_attendance()
+        elif st.session_state.current_page == "daily_task_management": # NEW: Daily Task Management route
+            daily_task_management()
         elif st.session_state.current_page == "chat":
             chat_page()
         elif st.session_state.current_page == "view_payslip":
@@ -2747,6 +3076,8 @@ def main():
             admin_manage_disciplinary_records()
         elif st.session_state.current_page == "admin_manage_attendance" and (user_role == "admin" or (user_department == "HR" and user_grade == "Manager")):
             admin_manage_attendance()
+        elif st.session_state.current_page == "admin_view_task_analytics" and (user_role == "admin" or (user_department == "HR" and user_grade == "Manager")): # NEW: Admin/HR Task Analytics route
+            admin_view_task_analytics()
         else:
             st.error("Access Denied: Page not found or you do not have permission to view this page.")
             st.session_state.current_page = "dashboard" # Redirect to dashboard
